@@ -10,7 +10,7 @@ from datetime import datetime
 import logging
 import pickle
 import collections
-import pandas as pd  # Добавлен импорт библиотеки pandas
+import pandas as pd
 
 from core.anomaly_detector import AnomalyDetector
 from core.sniffer import Sniffer
@@ -27,7 +27,6 @@ def main():
 
     parser = argparse.ArgumentParser(
         description="Программа для обнаружения сетевых аномалий с помощью автокодировщика.")
-    # Добавлен новый режим 'collect'
     parser.add_argument("mode", choices=['train', 'test', 'collect'],
                         help="Режим работы программы: 'train' (обучение), 'test' (тестирование), 'collect' (сбор данных).")
     parser.add_argument("--interface", help="Сетевой интерфейс для захвата трафика (например, 'eth0').")
@@ -165,18 +164,18 @@ def main():
             row_data = [timestamp] + [
                 metrics['total']['packets'], metrics['total']['loopback'], metrics['total']['multicast'],
                 metrics['total']['udp'], metrics['total']['tcp'], metrics['total']['options'],
-                metrics['total']['fragment'], metrics['total']['fin'], metrics['total']['sin'],
+                metrics['total']['fragment'], metrics['total']['fin'], metrics['total']['syn'],
                 metrics['total']['intensivity'],
                 metrics['input']['packets'], metrics['input']['udp'], metrics['input']['tcp'],
                 metrics['input']['options'], metrics['input']['fragment'], metrics['input']['fin'],
-                metrics['input']['sin'], metrics['input']['intensivity'],
+                metrics['input']['syn'], metrics['input']['intensivity'],
                 metrics['output']['packets'], metrics['output']['udp'], metrics['output']['tcp'],
                 metrics['output']['options'], metrics['output']['fragment'], metrics['output']['fin'],
-                metrics['output']['sin'], metrics['output']['intensivity']
+                metrics['output']['syn'], metrics['output']['intensivity']
             ]
 
             # Запись данных в CSV-файл
-            df = pd.DataFrame([row_data])
+            df = pd.DataFrame([row_data], columns=headers)  # Добавлено указание заголовков
             df.to_csv(args.data_file, mode='a', header=is_new_file, index=False)
             logging.info(f"Записаны данные за интервал. Всего пакетов: {metrics['total']['packets']}")
 
