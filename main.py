@@ -9,6 +9,8 @@ import time
 from datetime import datetime
 import logging
 import pickle
+import collections
+import pandas as pd  # Добавлен импорт библиотеки pandas
 
 from core.anomaly_detector import AnomalyDetector
 from core.sniffer import Sniffer
@@ -25,12 +27,13 @@ def main():
 
     parser = argparse.ArgumentParser(
         description="Программа для обнаружения сетевых аномалий с помощью автокодировщика.")
-    parser.add_argument("mode", choices=['train', 'test'],
-                        help="Режим работы программы: 'train' для обучения, 'test' для онлайн-тестирования.")
+    # Добавлен новый режим 'collect'
+    parser.add_argument("mode", choices=['train', 'test', 'collect'],
+                        help="Режим работы программы: 'train' (обучение), 'test' (тестирование), 'collect' (сбор данных).")
     parser.add_argument("--interface", help="Сетевой интерфейс для захвата трафика (например, 'eth0').")
     parser.add_argument("--network", help="CIDR-адрес сети для фильтрации трафика (например, '192.168.1.0/24').")
     parser.add_argument("--interval", type=int, default=10,
-                        help="Интервал агрегации метрик в секундах. Используется в режиме 'test'.")
+                        help="Интервал агрегации метрик в секундах. Используется в режиме 'test' и 'collect'.")
     parser.add_argument("--model-dir", default="models", help="Директория для сохранения/загрузки модели.")
     parser.add_argument("--time-step", type=int, default=10,
                         help="Размер временного шага для последовательностей. Используется в обоих режимах.")
@@ -41,7 +44,7 @@ def main():
     parser.add_argument("--threshold", type=float, default=0.01,
                         help="Порог для определения аномалий. Используется в режиме 'test'.")
     parser.add_argument("--data-file",
-                        help="Путь к файлу с данными для обучения. Используется только в режиме 'train'.")
+                        help="Путь к файлу с данными. В режиме 'train' для чтения, в 'collect' для записи.")
 
     args = parser.parse_args()
 
@@ -94,11 +97,72 @@ def main():
             nonlocal processor
             nonlocal detector
 
-            # Здесь мы преобразуем словарь метрик в список для обработки
-            # Порядок метрик должен соответствовать тому, что было на обучении
-            # В данном примере, я беру 'packets', 'udp', 'tcp', 'options', 'fragment', 'fin', 'sin' из секции 'total'
-            # (необходимо убедиться, что список метрик соответствует тому, что было в файле для обучения)
             metric_values = [
+                metrics['total']['packets'], metrics['total']['loopback'], metrics['total']['multicast'],
+                metrics['total']['udp'], metrics['total']['tcp'], metrics['total']['options'],
+                metrics['total']['fragment'], metrics['total']['fin'], metrics['total']['syn'],
+                metrics['total']['intensivity'],
+                metrics['input']['packets'], metrics['input']['udp'], metrics['input']['tcp'],
+                metrics['input']['options'], metrics['input']['fragment'], metrics['input']['fin'],
+                metrics['input']['syn'], metrics['input']['intensivity'],
+                metrics['output']['packets'], metrics['output']['udp'], metrics['output']['tcp'],
+                metrics['output']['options'], metrics['output']['fragment'], metrics['output']['fin'],
+                metrics['output']['syn'], metrics['output']['intensivity']
+            ]
+
+            with buffer_lock:
+                scaled_metric = processor.scaler.transform(np.array(metric_values).reshape(1, -1))
+                data_buffer.append(scaled_metric.flatten()[0])
+
+                if len(data_buffer) == args.time_step:
+                    input_data = np.array(list(data_buffer)).reshape(1, args.time_step, 1)
+                    reconstruction_error = detector.calculate_reconstruction_error(input_data)
+                    is_anomaly = reconstruction_error > args.threshold
+
+                    status = "АНОМАЛИЯ ОБНАРУЖЕНА" if is_anomaly else "Данные обработаны"
+                    logging.info(f"Статус: {status} | Ошибка реконструкции: {reconstruction_error:.4f}")
+                    data_buffer.popleft()
+
+        sniffer = Sniffer(
+            interface=args.interface,
+            network_cidr=args.network,
+            time_interval=args.interval,
+            callback=handle_metrics
+        )
+        sniffer.start_sniffing()
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logging.info("\nПрограмма завершена пользователем.")
+            sniffer.stop_sniffing()
+
+    elif args.mode == 'collect':
+        if not args.interface or not args.network or not args.data_file:
+            logging.error("В режиме 'collect' необходимо указать --interface, --network и --data-file.")
+            return
+
+        logging.info(f"Запуск сниффера для сбора данных в файл: {args.data_file}...")
+
+        # Заголовки для CSV-файла. Порядок должен соответствовать порядку в handle_metrics
+        headers = [
+            'timestamp', 'total_packets', 'total_loopback', 'total_multicast', 'total_udp',
+            'total_tcp', 'total_options', 'total_fragment', 'total_fin', 'total_syn',
+            'total_intensity', 'input_packets', 'input_udp', 'input_tcp', 'input_options',
+            'input_fragment', 'input_fin', 'input_syn', 'input_intensity',
+            'output_packets', 'output_udp', 'output_tcp', 'output_options',
+            'output_fragment', 'output_fin', 'output_syn', 'output_intensity'
+        ]
+
+        is_new_file = not os.path.exists(args.data_file)
+
+        def handle_metrics_for_collect(metrics):
+            """Обработчик метрик для режима сбора."""
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Подготовка строки данных для записи
+            row_data = [timestamp] + [
                 metrics['total']['packets'], metrics['total']['loopback'], metrics['total']['multicast'],
                 metrics['total']['udp'], metrics['total']['tcp'], metrics['total']['options'],
                 metrics['total']['fragment'], metrics['total']['fin'], metrics['total']['sin'],
@@ -111,30 +175,19 @@ def main():
                 metrics['output']['sin'], metrics['output']['intensivity']
             ]
 
-            with buffer_lock:
-                # Нормализация одной группы метрик
-                scaled_metric = processor.scaler.transform(np.array(metric_values).reshape(1, -1))
-                data_buffer.append(scaled_metric.flatten()[0])
+            # Запись данных в CSV-файл
+            df = pd.DataFrame([row_data])
+            df.to_csv(args.data_file, mode='a', header=is_new_file, index=False)
+            logging.info(f"Записаны данные за интервал. Всего пакетов: {metrics['total']['packets']}")
 
-                if len(data_buffer) == args.time_step:
-                    input_data = np.array(list(data_buffer)).reshape(1, args.time_step, 1)
-                    reconstruction_error = detector.calculate_reconstruction_error(input_data)
-                    is_anomaly = reconstruction_error > args.threshold
-
-                    status = "АНОМАЛИЯ ОБНАРУЖЕНА" if is_anomaly else "Данные обработаны"
-                    logging.info(f"Статус: {status} | Ошибка реконструкции: {reconstruction_error:.4f}")
-                    data_buffer.popleft()  # Удаляем старый элемент, чтобы буфер оставался скользящим
-
-        # Запуск сниффера в отдельном потоке
         sniffer = Sniffer(
             interface=args.interface,
             network_cidr=args.network,
             time_interval=args.interval,
-            callback=handle_metrics
+            callback=handle_metrics_for_collect
         )
         sniffer.start_sniffing()
 
-        # Главный поток ждет завершения
         try:
             while True:
                 time.sleep(1)
