@@ -27,6 +27,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         description="Программа для обнаружения сетевых аномалий с помощью автокодировщика.")
+    # Добавлен новый режим 'collect'
     parser.add_argument("mode", choices=['train', 'test', 'collect'],
                         help="Режим работы программы: 'train' (обучение), 'test' (тестирование), 'collect' (сбор данных).")
     parser.add_argument("--interface", help="Сетевой интерфейс для захвата трафика (например, 'eth0').")
@@ -154,7 +155,12 @@ def main():
             'output_fragment', 'output_fin', 'output_syn', 'output_intensity'
         ]
 
-        is_new_file = not os.path.exists(args.data_file)
+        # --- Ключевое изменение: перезапись файла при каждом запуске ---
+        # Сначала записываем только заголовки, что очищает файл, если он существовал
+        df_header = pd.DataFrame(columns=headers)
+        df_header.to_csv(args.data_file, mode='w', index=False)
+
+        # -----------------------------------------------------------------
 
         def handle_metrics_for_collect(metrics):
             """Обработчик метрик для режима сбора."""
@@ -174,9 +180,9 @@ def main():
                 metrics['output']['syn'], metrics['output']['intensivity']
             ]
 
-            # Запись данных в CSV-файл
-            df = pd.DataFrame([row_data], columns=headers)  # Добавлено указание заголовков
-            df.to_csv(args.data_file, mode='a', header=is_new_file, index=False)
+            # Запись данных в CSV-файл (теперь в режиме 'append')
+            df = pd.DataFrame([row_data], columns=headers)
+            df.to_csv(args.data_file, mode='a', header=False, index=False)
             logging.info(f"Записаны данные за интервал. Всего пакетов: {metrics['total']['packets']}")
 
         sniffer = Sniffer(
