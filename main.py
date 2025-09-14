@@ -16,6 +16,17 @@ from core.anomaly_detector import AnomalyDetector
 from core.sniffer import Sniffer
 from core.data_processor import DataProcessor
 
+# Заголовки для DataFrame, чтобы избежать UserWarning при нормализации
+HEADERS = [
+    'total_packets', 'total_loopback', 'total_multicast', 'total_udp',
+    'total_tcp', 'total_options', 'total_fragment', 'total_fin', 'total_syn',
+    'total_intensity', 'input_packets', 'input_udp', 'input_tcp',
+    'input_options', 'input_fragment', 'input_fin', 'input_syn',
+    'input_intensity', 'output_packets', 'output_udp', 'output_tcp',
+    'output_options', 'output_fragment', 'output_fin', 'output_syn',
+    'output_intensity'
+]
+
 
 def main():
     # Настройка логирования
@@ -27,7 +38,6 @@ def main():
 
     parser = argparse.ArgumentParser(
         description="Программа для обнаружения сетевых аномалий с помощью автокодировщика.")
-    # Добавлен новый режим 'collect'
     parser.add_argument("mode", choices=['train', 'test', 'collect'],
                         help="Режим работы программы: 'train' (обучение), 'test' (тестирование), 'collect' (сбор данных).")
     parser.add_argument("--interface", help="Сетевой интерфейс для захвата трафика (например, 'eth0').")
@@ -96,6 +106,9 @@ def main():
             """Обработчик агрегированных метрик от сниффера."""
             nonlocal processor
             nonlocal detector
+            nonlocal data_buffer
+            nonlocal buffer_lock
+            nonlocal args
 
             metric_values = [
                 metrics['total']['packets'], metrics['total']['loopback'], metrics['total']['multicast'],
@@ -111,7 +124,11 @@ def main():
             ]
 
             with buffer_lock:
-                scaled_metric = processor.scaler.transform(np.array(metric_values).reshape(1, -1))
+                # Создаем DataFrame из списка значений и заголовков
+                metric_values_df = pd.DataFrame([metric_values], columns=HEADERS)
+                scaled_metric = processor.scaler.transform(metric_values_df)
+
+                # Добавляем нормализованные данные в буфер
                 data_buffer.append(scaled_metric.flatten()[0])
 
                 if len(data_buffer) == args.time_step:
@@ -146,27 +163,16 @@ def main():
         logging.info(f"Запуск сниффера для сбора данных в файл: {args.data_file}...")
 
         # Заголовки для CSV-файла. Порядок должен соответствовать порядку в handle_metrics
-        headers = [
-            'timestamp', 'total_packets', 'total_loopback', 'total_multicast', 'total_udp',
-            'total_tcp', 'total_options', 'total_fragment', 'total_fin', 'total_syn',
-            'total_intensity', 'input_packets', 'input_udp', 'input_tcp', 'input_options',
-            'input_fragment', 'input_fin', 'input_syn', 'input_intensity',
-            'output_packets', 'output_udp', 'output_tcp', 'output_options',
-            'output_fragment', 'output_fin', 'output_syn', 'output_intensity'
-        ]
+        headers_with_timestamp = ['timestamp'] + HEADERS
 
-        # --- Ключевое изменение: перезапись файла при каждом запуске ---
         # Сначала записываем только заголовки, что очищает файл, если он существовал
-        df_header = pd.DataFrame(columns=headers)
+        df_header = pd.DataFrame(columns=headers_with_timestamp)
         df_header.to_csv(args.data_file, mode='w', index=False)
-
-        # -----------------------------------------------------------------
 
         def handle_metrics_for_collect(metrics):
             """Обработчик метрик для режима сбора."""
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # Подготовка строки данных для записи
             row_data = [timestamp] + [
                 metrics['total']['packets'], metrics['total']['loopback'], metrics['total']['multicast'],
                 metrics['total']['udp'], metrics['total']['tcp'], metrics['total']['options'],
@@ -180,8 +186,7 @@ def main():
                 metrics['output']['syn'], metrics['output']['intensivity']
             ]
 
-            # Запись данных в CSV-файл (теперь в режиме 'append')
-            df = pd.DataFrame([row_data], columns=headers)
+            df = pd.DataFrame([row_data], columns=headers_with_timestamp)
             df.to_csv(args.data_file, mode='a', header=False, index=False)
             logging.info(f"Записаны данные за интервал. Всего пакетов: {metrics['total']['packets']}")
 

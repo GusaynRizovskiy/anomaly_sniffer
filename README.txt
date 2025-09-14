@@ -38,4 +38,8 @@
 * `--interval <секунды>`: Интервал агрегации метрик. Программа собирает данные в течение этого времени, а затем анализирует их. По умолчанию: 10.
 * `--model-dir <папка>`: Директория, из которой будет загружена ранее сохраненная модель. По умолчанию: `models`.
 
-python main.py collect --interface "Realtek RTL8822CE 802.11ac PCIe Adapter" --network 192.168.1.0/24 --interval 2 --data-file normal_traffic.csv
+Для работы:
+1)Сбор трафика с интерфейса с указанием сети и указанием интервала захвата
+python main.py collect --interface "Realtek RTL8822CE 802.11ac PCIe Adapter" --network 192.168.1.0/24 --interval 4 --data-file normal_traffic.csv
+2)Обучение модели и ее дальнейшее сохранение(указывается файл для обучения)
+python main.py train --data-file normal_traffic.csv
