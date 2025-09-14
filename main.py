@@ -11,6 +11,7 @@ import logging
 import pickle
 import collections
 import pandas as pd
+import json  # Добавлен импорт для работы с JSON
 
 from core.anomaly_detector import AnomalyDetector
 from core.sniffer import Sniffer
@@ -26,6 +27,23 @@ HEADERS = [
     'output_options', 'output_fragment', 'output_fin', 'output_syn',
     'output_intensity'
 ]
+
+
+def log_anomaly(anomaly_data):
+    """
+    Запись данных об аномалии в JSON-файл.
+    Структура файла будет соответствовать требованиям СИБ.
+    """
+    try:
+        log_dir = "logs"
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, "anomaly_events.json")
+
+        with open(log_file, 'a') as f:
+            f.write(json.dumps(anomaly_data) + '\n')
+        logging.info("Событие аномалии записано в файл.")
+    except Exception as e:
+        logging.error(f"Ошибка при записи лога аномалии: {e}")
 
 
 def main():
@@ -139,6 +157,22 @@ def main():
                     status = "АНОМАЛИЯ ОБНАРУЖЕНА" if is_anomaly else "Данные обработаны"
                     logging.info(f"Статус: {status} | Ошибка реконструкции: {reconstruction_error:.4f}")
                     data_buffer.popleft()
+
+                    if is_anomaly:
+                        anomaly_event = {
+                            "gid": 1,
+                            "sid": 0,
+                            "rev": 0,
+                            "signature_msg": f"Anomaly detected. Reconstruction error: {reconstruction_error:.4f}",
+                            "appearance_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "priority": 1,
+                            "source_ip": "0.0.0.0",
+                            "source_port": 0,
+                            "destination_ip": "0.0.0.0",
+                            "destination_port": 0,
+                            "packet_dump": ""
+                        }
+                        log_anomaly(anomaly_event)
 
         sniffer = Sniffer(
             interface=args.interface,

@@ -43,3 +43,5 @@
 python main.py collect --interface "Realtek RTL8822CE 802.11ac PCIe Adapter" --network 192.168.1.0/24 --interval 4 --data-file normal_traffic.csv
 2)Обучение модели и ее дальнейшее сохранение(указывается файл для обучения)
 python main.py train --data-file normal_traffic.csv
+3)Для режима тестирования
+python main.py test --interface "Realtek RTL8822CE 802.11ac PCIe Adapter" --network 192.168.1.0/24
