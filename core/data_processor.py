@@ -42,10 +42,11 @@ class DataProcessor:
         """Создание последовательностей для нейронной сети."""
         xs = []
         for i in range(len(data) - time_step):
-            # Изменен, чтобы работать с нормализованным np.array
+            # Теперь выбираем все столбцы (все метрики)
             xs.append(data[i:(i + time_step)])
         # Изменяем размерность для соответствия модели LSTM
-        return np.array(xs).reshape(-1, time_step, 1)
+        # (количество_последовательностей, time_step, количество_признаков)
+        return np.array(xs).reshape(-1, time_step, data.shape[1])
 
     def load_and_preprocess_training_data(self, file_path, fit_scaler=True, columns_to_use=None):
         """Загрузка и нормализация данных для обучения."""

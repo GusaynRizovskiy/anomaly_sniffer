@@ -18,9 +18,9 @@ class AnomalyDetector:
         self.time_step = time_step
         self.loss_metric = mse_loss()
 
-    def build_model(self):
+    def build_model(self,num_features):
         """Создание архитектуры нейронной сети."""
-        inputs = Input(shape=(self.time_step, 1))
+        inputs = Input(shape=(self.time_step, num_features))
         x = Conv1D(filters=32, kernel_size=3, padding='same', activation='relu')(inputs)
         x = LSTM(16, return_sequences=True, activation='relu')(x)
         x = LSTM(8, activation='relu')(x)
