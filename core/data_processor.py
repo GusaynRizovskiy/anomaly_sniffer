@@ -15,17 +15,9 @@ class DataProcessor:
     def preprocess_data(self, data):
         """Предварительная обработка и нормализация данных."""
         if not isinstance(data, pd.DataFrame):
-            # Предполагаем, что данные приходят в виде списка или массива,
+            # Предполагаем, что данные приходят в виде словаря от sniffer
             # и создаем DataFrame для удобства.
-            # Если данные - это одна строка, то data[0] будет первым элементом,
-            # и мы получим правильное количество колонок.
-            if len(data.shape) == 1:
-                data = data.reshape(1, -1)
-            data = pd.DataFrame(data, columns=[f'metric_{i}' for i in range(data.shape[1])])
-
-        # Удаляем временной столбец, если он есть
-        if data.columns[0].lower().startswith('time'):
-            data = data.iloc[:, 1:]
+            data = pd.DataFrame(data)
 
         # Нормализация
         if self.scaler is None:
@@ -34,9 +26,8 @@ class DataProcessor:
         else:
             scaled_data = self.scaler.transform(data)
 
-        # reshape(-1, 1) изменяет форму массива, чтобы он имел один столбец.
-        # Это нужно для совместимости с входным слоем LSTM.
-        return scaled_data.flatten().reshape(-1, 1)
+        # Возвращаем двумерный массив со всеми метриками
+        return scaled_data
 
     def create_sequences(self, data, time_step):
         """Создание последовательностей для нейронной сети."""
