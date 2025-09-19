@@ -162,10 +162,13 @@ def main():
             ]
 
             scaled_data = processor.preprocess_data(pd.DataFrame([row_data], columns=HEADERS))
-            data_queue.extend(scaled_data.flatten())
+            # ИСПРАВЛЕНИЕ: Добавляем одномерный массив (строку) в очередь как один элемент
+            data_queue.append(scaled_data[0])
 
             if len(data_queue) == args.time_step:
-                input_data = np.array(list(data_queue)).reshape(1, args.time_step, 1)
+                # ИСПРАВЛЕНИЕ: Изменяем форму массива для правильного формата (1, time_step, 26)
+                input_data = np.array(list(data_queue)).reshape(1, args.time_step, 26)
+
                 reconstruction_error = detector.calculate_reconstruction_error(input_data)
                 is_anomaly = reconstruction_error > args.threshold
 
