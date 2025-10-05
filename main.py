@@ -164,7 +164,7 @@ def main():
     parser.add_argument('-n', '--network', default='192.168.1.0/24',
                         help="Локальная сеть в формате CIDR (для определения входящего/исходящего).")
     parser.add_argument('-t', '--interval', type=int, default=5, help="Интервал агрегации метрик в секундах.")
-    parser.add_argument('-d', '--data_file', default='training_data.csv', help="Файл для сохранения/загрузки данных.")
+    parser.add_argument('-d', '--data-file', default='training_data.csv', help="Файл для сохранения/загрузки данных.")
     parser.add_argument('-ts', '--time_step', type=int, default=10, help="Длина временной последовательности для LSTM.")
     parser.add_argument('-e', '--epochs', type=int, default=50, help="Количество эпох для обучения.")
     parser.add_argument('-b', '--batch_size', type=int, default=64, help="Размер батча для обучения.")
