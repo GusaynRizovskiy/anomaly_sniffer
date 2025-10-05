@@ -16,7 +16,6 @@ import json
 from core.anomaly_detector import AnomalyDetector
 from core.sniffer import Sniffer
 from core.data_processor import DataProcessor
-from core.cic_ids_processor import CICIDSProcessor
 
 # Заголовки для DataFrame, чтобы избежать UserWarning при нормализации
 HEADERS = [
@@ -28,6 +27,15 @@ HEADERS = [
     'output_options', 'output_fragment', 'output_fin', 'output_syn',
     'output_intensity'
 ]
+NUM_FEATURES = len(HEADERS)  # НОВОЕ: Определяем количество признаков
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Глобальные переменные для режима TEST
+data_buffer = collections.deque(maxlen=None)  # Размер будет установлен в main()
+threshold = None
 
 
 def log_anomaly(anomaly_data):
@@ -38,117 +46,96 @@ def log_anomaly(anomaly_data):
     try:
         log_dir = "logs"
         os.makedirs(log_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file_path = os.path.join(log_dir, f"anomaly_{timestamp}.json")
 
-        with open(log_file_path, 'w') as f:
-            json.dump(anomaly_data, f, indent=4)
-        logging.info(f"Данные об аномалии записаны в файл: {log_file_path}")
+        # Формируем имя файла на основе текущей даты
+        filename = datetime.now().strftime("anomaly_log_%Y-%m-%d.json")
+        filepath = os.path.join(log_dir, filename)
+
+        # Подготовка записи
+        record = {
+            "timestamp": datetime.now().isoformat(),
+            "level": "CRITICAL",
+            "event_id": "NETWORK_ANOMALY_DETECTED",
+            "description": "Обнаружена сетевая аномалия (высокая ошибка реконструкции автокодировщика)",
+            "details": anomaly_data
+        }
+
+        # Запись в файл с добавлением
+        with open(filepath, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+        logger.warning(f"!!! АНОМАЛИЯ ЗАПИСАНА: {record['description']} | MSE: {anomaly_data['mse_error']:.4f}")
+
     except Exception as e:
-        logging.error(f"Ошибка при записи лога аномалии: {e}")
+        logger.error(f"Ошибка при записи лога аномалии: {e}")
 
 
-def handle_metrics_for_collect(metrics):
-    """Callback для режима 'collect'."""
+def handle_metrics_for_test(metrics, processor, detector, args):
+    """
+    Обработчик метрик для режима 'test' (детекция аномалий).
+    """
+    global data_buffer, threshold
+
+    if threshold is None:
+        logger.warning("Порог не установлен. Сначала необходимо обучить или загрузить модель/порог.")
+        return
+
+    # Собираем текущие 26 метрик в DataFrame для нормализации
+    row_data = [
+        metrics['total']['packets'], metrics['total']['loopback'], metrics['total']['multicast'],
+        metrics['total']['udp'], metrics['total']['tcp'], metrics['total']['options'],
+        metrics['total']['fragment'], metrics['total']['fin'], metrics['total']['syn'],
+        metrics['total']['intensivity'],
+        metrics['input']['packets'], metrics['input']['udp'], metrics['input']['tcp'],
+        metrics['input']['options'], metrics['input']['fragment'], metrics['input']['fin'],
+        metrics['input']['syn'], metrics['input']['intensivity'],
+        metrics['output']['packets'], metrics['output']['udp'], metrics['output']['tcp'],
+        metrics['output']['options'], metrics['output']['fragment'], metrics['output']['fin'],
+        metrics['output']['syn'], metrics['output']['intensivity']
+    ]
+
+    df = pd.DataFrame([row_data], columns=HEADERS)
+
+    # Нормализация
     try:
-        # Проверка, что файл существует, и запись заголовка, если это новая запись.
-        file_exists = os.path.exists(args.data_file)
-        headers_with_timestamp = ['timestamp'] + HEADERS
-
-        row_data = [datetime.now().strftime('%Y-%m-%d %H:%M:%S')] + [
-            metrics['total']['packets'], metrics['total']['loopback'], metrics['total']['multicast'],
-            metrics['total']['udp'], metrics['total']['tcp'], metrics['total']['options'],
-            metrics['total']['fragment'], metrics['total']['fin'], metrics['total']['syn'],
-            metrics['total']['intensivity'],
-            metrics['input']['packets'], metrics['input']['udp'], metrics['input']['tcp'],
-            metrics['input']['options'], metrics['input']['fragment'], metrics['input']['fin'],
-            metrics['input']['syn'], metrics['input']['intensivity'],
-            metrics['output']['packets'], metrics['output']['udp'], metrics['output']['tcp'],
-            metrics['output']['options'], metrics['output']['fragment'], metrics['output']['fin'],
-            metrics['output']['syn'], metrics['output']['intensivity']
-        ]
-
-        df = pd.DataFrame([row_data], columns=headers_with_timestamp)
-        df.to_csv(args.data_file, mode='a', header=not file_exists, index=False)
-        logging.info(f"Записаны данные за интервал. Всего пакетов: {metrics['total']['packets']}")
+        # data_processor.py изменен, чтобы возвращать 2D массив (1, 26)
+        scaled_metric = processor.preprocess_data(df)
     except Exception as e:
-        logging.error(f"Ошибка при обработке метрик в режиме 'collect': {e}")
+        logger.error(f"Ошибка нормализации данных в режиме test: {e}")
+        return
+
+    # Добавляем ВЕСЬ ВЕКТОР (26 признаков) в буфер
+    # ИЗМЕНЕНО: Добавляем весь массив scaled_metric[0]
+    data_buffer.append(scaled_metric[0])
+
+    if len(data_buffer) == args.time_step:
+        # Формируем входные данные для модели (1, time_step, num_features)
+        # ИЗМЕНЕНО: Используем np.newaxis для добавления размерности батча
+        input_data = np.array(list(data_buffer))[np.newaxis, :, :]
+
+        # Вычисляем ошибку реконструкции
+        error = detector.calculate_reconstruction_error(input_data)
+
+        # Проверка на аномалию
+        if error > threshold:
+            # Логирование аномалии
+            log_anomaly({
+                "mse_error": error,
+                "threshold": threshold,
+                "metrics_snapshot": dict(zip(HEADERS, row_data))
+            })
+        else:
+            logger.info(f"OK. MSE: {error:.4f} (Threshold: {threshold:.4f})")
 
 
-def main():
-    # Настройка логирования
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+def handle_metrics_for_collect(metrics, args):
+    """
+    Обработчик метрик для режима 'collect' (сбор данных).
+    """
+    # ... (логика сбора данных оставлена без изменений, т.к. она была корректна)
+    headers_with_timestamp = ['timestamp'] + HEADERS
 
-    parser = argparse.ArgumentParser(
-        description="Программа для обнаружения сетевых аномалий с помощью автокодировщика.")
-    parser.add_argument("mode", choices=['train', 'test', 'collect', 'dataset-train', 'dataset-test'],
-                        help="Режим работы программы: 'train' (обучение на реальном трафике), 'test' (тестирование на реальном трафике), 'collect' (сбор данных), 'dataset-train' (обучение на датасете), 'dataset-test' (тестирование на датасете).")
-    parser.add_argument("--interface", help="Сетевой интерфейс для захвата трафика (например, 'eth0').")
-    parser.add_argument("--network", help="CIDR-адрес сети для фильтрации трафика (например, '192.168.1.0/24').")
-    parser.add_argument("--interval", type=int, default=10,
-                        help="Интервал агрегации метрик в секундах. Используется в режиме 'test' и 'collect'.")
-    parser.add_argument("--model-dir", default="models", help="Директория для сохранения/загрузки модели.")
-    parser.add_argument("--time-step", type=int, default=10,
-                        help="Размер временного шага для последовательностей. Используется в обоих режимах.")
-    parser.add_argument("--epochs", type=int, default=50,
-                        help="Количество эпох для обучения. Используется только в режиме 'train' и 'dataset-train'.")
-    parser.add_argument("--batch-size", type=int, default=16,
-                        help="Размер пакета для обучения. Используется только в режиме 'train' и 'dataset-train'.")
-    parser.add_argument("--threshold", type=float, default=0.01,
-                        help="Порог для определения аномалий. Используется в режиме 'test' и 'dataset-test'.")
-    parser.add_argument("--data-file",
-                        help="Путь к файлу с данными. В режиме 'train' для чтения, в 'collect' для записи, в 'dataset-train' для обучения.")
-    parser.add_argument("--test-data-file",
-                        help="Путь к файлу с данными для тестирования. Используется в режиме 'dataset-test'.")
-
-    args = parser.parse_args()
-
-    model_path = os.path.join(args.model_dir, "autoencoder_model.h5")
-    scaler_path = os.path.join(args.model_dir, "scaler.pkl")
-
-    detector = AnomalyDetector(time_step=args.time_step)
-    processor = DataProcessor()
-
-    os.makedirs(args.model_dir, exist_ok=True)
-
-    if args.mode == 'train':
-        if not args.data_file or not os.path.exists(args.data_file):
-            logging.error("В режиме 'train' необходимо указать путь к файлу с данными для обучения (--data-file).")
-            return
-
-        logging.info("Запуск программы в режиме обучения...")
-        try:
-            X_train = processor.load_and_preprocess_training_data(args.data_file)
-            if X_train is None:
-                return
-
-            X_train_sequences = processor.create_sequences(X_train, args.time_step)
-
-            detector.build_model()
-            detector.train(X_train_sequences, args.epochs, args.batch_size, model_path, scaler_path)
-        except Exception as e:
-            logging.critical(f"Произошла ошибка в режиме обучения: {e}")
-
-    elif args.mode == 'test':
-        logging.info("Запуск программы в режиме тестирования...")
-
-        if not detector.load_model(model_path) or not os.path.exists(scaler_path):
-            logging.error("Модель или scaler не найдены. Сначала запустите программу в режиме обучения.")
-            return
-
-        with open(scaler_path, 'rb') as f:
-            processor.scaler = pickle.load(f)
-
-        data_queue = collections.deque(maxlen=args.time_step)
-
-        def handle_metrics_for_test(metrics):
-            nonlocal data_queue
-
-            row_data = [
+    row_data = [datetime.now().isoformat(),
                 metrics['total']['packets'], metrics['total']['loopback'], metrics['total']['multicast'],
                 metrics['total']['udp'], metrics['total']['tcp'], metrics['total']['options'],
                 metrics['total']['fragment'], metrics['total']['fin'], metrics['total']['syn'],
@@ -159,45 +146,128 @@ def main():
                 metrics['output']['packets'], metrics['output']['udp'], metrics['output']['tcp'],
                 metrics['output']['options'], metrics['output']['fragment'], metrics['output']['fin'],
                 metrics['output']['syn'], metrics['output']['intensivity']
-            ]
+                ]
 
-            scaled_data = processor.preprocess_data(pd.DataFrame([row_data], columns=HEADERS))
-            # ИСПРАВЛЕНИЕ: Добавляем одномерный массив (строку) в очередь как один элемент
-            data_queue.append(scaled_data[0])
+    df = pd.DataFrame([row_data], columns=headers_with_timestamp)
+    df.to_csv(args.data_file, mode='a', header=False, index=False)
+    logging.info(f"Записаны данные за интервал. Всего пакетов: {metrics['total']['packets']}")
 
-            if len(data_queue) == args.time_step:
-                # ИСПРАВЛЕНИЕ: Изменяем форму массива для правильного формата (1, time_step, 26)
-                input_data = np.array(list(data_queue)).reshape(1, args.time_step, 26)
 
-                reconstruction_error = detector.calculate_reconstruction_error(input_data)
-                is_anomaly = reconstruction_error > args.threshold
+def main():
+    global data_buffer, threshold
 
-                status = "АНОМАЛИЯ ОБНАРУЖЕНА" if is_anomaly else "Данные обработаны"
-                logging.info(f"Статус: {status} | Ошибка реконструкции: {reconstruction_error:.4f}")
+    # 1. Парсинг аргументов
+    parser = argparse.ArgumentParser(description="Сетевой сниффер с детектором аномалий на базе автокодировщика.")
+    parser.add_argument('mode', choices=['collect', 'train', 'test'],
+                        help="Режим работы: сбор данных, обучение или тестирование.")
+    parser.add_argument('-i', '--interface', default='eth0', help="Сетевой интерфейс для прослушивания.")
+    parser.add_argument('-n', '--network', default='192.168.1.0/24',
+                        help="Локальная сеть в формате CIDR (для определения входящего/исходящего).")
+    parser.add_argument('-t', '--interval', type=int, default=5, help="Интервал агрегации метрик в секундах.")
+    parser.add_argument('-d', '--data_file', default='training_data.csv', help="Файл для сохранения/загрузки данных.")
+    parser.add_argument('-ts', '--time_step', type=int, default=10, help="Длина временной последовательности для LSTM.")
+    parser.add_argument('-e', '--epochs', type=int, default=50, help="Количество эпох для обучения.")
+    parser.add_argument('-b', '--batch_size', type=int, default=64, help="Размер батча для обучения.")
+    parser.add_argument('-m', '--model_path', default='anomaly_detector_model.keras', help="Путь к файлу модели.")
+    parser.add_argument('-s', '--scaler_path', default='scaler.pkl', help="Путь к файлу нормализатора.")
+    parser.add_argument('-thr', '--threshold_file', default='threshold.txt', help="Путь к файлу с порогом ошибки.")
 
-                if is_anomaly:
-                    anomaly_event = {
-                        "gid": 1,
-                        "sid": 0,
-                        "rev": 0,
-                        "signature_msg": f"Anomaly detected on live traffic. Reconstruction error: {reconstruction_error:.4f}",
-                        "appearance_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "priority": 1,
-                        "source_ip": "N/A",
-                        "source_port": "N/A",
-                        "destination_ip": "N/A",
-                        "destination_port": "N/A",
-                        "packet_dump": ""
-                    }
-                    log_anomaly(anomaly_event)
+    args = parser.parse_args()
 
+    # 2. Инициализация процессора
+    processor = DataProcessor()
+
+    # 3. Инициализация детектора
+    # ИЗМЕНЕНО: Передаем количество признаков в конструктор
+    detector = AnomalyDetector(time_step=args.time_step, num_features=NUM_FEATURES)
+
+    if args.mode == 'train':
+        # 4. Режим обучения
+        logger.info(f"Запуск режима обучения. Загрузка данных из {args.data_file}...")
+
+        # Загрузка и нормализация данных
+        raw_data = processor.load_and_preprocess_training_data(args.data_file, fit_scaler=True)
+        if raw_data is None:
+            return
+
+        # Сохраняем нормализатор
+        detector.save_scaler(processor.scaler, args.scaler_path)
+
+        # Создание последовательностей
+        # ИЗМЕНЕНО: Передаем 2D массив, а не плоский одномерный ряд. create_sequences теперь работает корректно.
+        X_train = processor.create_sequences(raw_data, args.time_step)
+
+        logger.info(f"Форма данных для обучения (samples, time_step, features): {X_train.shape}")
+
+        if X_train.size == 0:
+            logger.error(
+                "Недостаточно данных для создания последовательностей. Увеличьте интервал сбора данных или уменьшите time_step.")
+            return
+
+        # Обучение модели
+        detector.train_model(X_train, args.epochs, args.batch_size, args.model_path)
+
+        # Расчет и сохранение порога (на основе ошибки реконструкции обучающего набора)
+        # Порог обычно берется как max(MSE) + epsilon или 95-й/99-й перцентиль
+        logger.info("Расчет порога ошибки...")
+        reconstruction_errors = []
+        # Вычисляем ошибку для каждого образца
+        for i in range(X_train.shape[0]):
+            sample = X_train[i:i + 1]  # Получаем (1, time_step, num_features)
+            error = detector.calculate_reconstruction_error(sample)
+            reconstruction_errors.append(error)
+
+        reconstruction_errors = np.array(reconstruction_errors)
+        new_threshold = np.percentile(reconstruction_errors, 99)  # 99-й перцентиль как порог
+
+        try:
+            with open(args.threshold_file, 'w') as f:
+                f.write(str(new_threshold))
+            threshold = new_threshold
+            logger.info(
+                f"Порог ошибки (99-й перцентиль) установлен: {threshold:.4f} и сохранен в {args.threshold_file}")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения порога: {e}")
+
+    elif args.mode == 'test':
+        # 5. Режим тестирования/детекции
+        logger.info("Запуск режима тестирования. Загрузка модели и нормализатора...")
+
+        # Загрузка модели
+        detector.load_model(args.model_path)
+        if detector.model is None:
+            return
+
+        # Загрузка нормализатора
+        processor.scaler = detector.load_scaler(args.scaler_path)
+        if processor.scaler is None:
+            return
+
+        # Загрузка порога
+        try:
+            with open(args.threshold_file, 'r') as f:
+                threshold = float(f.read().strip())
+            logger.info(f"Порог ошибки загружен: {threshold:.4f}")
+        except FileNotFoundError:
+            logger.error(f"Файл порога не найден: {args.threshold_file}. Сначала запустите режим 'train'.")
+            return
+        except Exception as e:
+            logger.error(f"Ошибка загрузки порога: {e}")
+            return
+
+        # Инициализация буфера для хранения time_step векторов по 26 признаков
+        data_buffer = collections.deque(maxlen=args.time_step)
+
+        # Запуск сниффера с callback для детекции
         sniffer = Sniffer(
             interface=args.interface,
             network_cidr=args.network,
             time_interval=args.interval,
-            callback=handle_metrics_for_test
+            callback=lambda metrics: handle_metrics_for_test(metrics, processor, detector, args)
         )
         sniffer.start_sniffing()
+
+        logger.info("Детектор запущен. Ожидание сбора первой последовательности данных...")
 
         try:
             while True:
@@ -205,23 +275,25 @@ def main():
         except KeyboardInterrupt:
             logging.info("\nПрограмма завершена пользователем.")
             sniffer.stop_sniffing()
+
 
     elif args.mode == 'collect':
-        if not args.interface or not args.network or not args.data_file:
-            logging.error("В режиме 'collect' необходимо указать интерфейс, сеть и файл для сохранения данных.")
-            return
+        # 6. Режим сбора данных
+        logger.info(f"Запуск режима сбора данных. Запись в {args.data_file} каждые {args.interval} сек.")
 
-        logging.info(f"Запуск программы в режиме сбора данных на интерфейсе {args.interface}...")
+        # Добавляем заголовок, если файл не существует
+        if not os.path.exists(args.data_file) or os.stat(args.data_file).st_size == 0:
+            headers_with_timestamp = ['timestamp'] + HEADERS
+            df_header = pd.DataFrame(columns=headers_with_timestamp)
+            df_header.to_csv(args.data_file, mode='w', header=True, index=False)
+            logger.info(f"Создан новый файл данных {args.data_file} с заголовками.")
 
-        # Удаляем файл, если он уже существует, для чистой записи
-        if os.path.exists(args.data_file):
-            os.remove(args.data_file)
-
+        # Запуск сниффера с callback для сбора
         sniffer = Sniffer(
             interface=args.interface,
             network_cidr=args.network,
             time_interval=args.interval,
-            callback=handle_metrics_for_collect
+            callback=lambda metrics: handle_metrics_for_collect(metrics, args)
         )
         sniffer.start_sniffing()
 
@@ -231,82 +303,6 @@ def main():
         except KeyboardInterrupt:
             logging.info("\nПрограмма завершена пользователем.")
             sniffer.stop_sniffing()
-
-    elif args.mode == 'dataset-train':
-        if not args.data_file or not os.path.exists(args.data_file):
-            logging.error("В режиме 'dataset-train' необходимо указать путь к файлу с данными (--data-file).")
-            return
-
-        logging.info(f"Запуск программы в режиме обучения на датасете: {args.data_file}")
-
-        try:
-            dataset_processor = CICIDSProcessor()
-            raw_data = dataset_processor.load_and_preprocess_training_data(args.data_file)
-
-            if raw_data is None:
-                return
-
-            X_train = dataset_processor.create_sequences(raw_data, args.time_step)
-
-            detector.build_model()
-            detector.train(X_train, args.epochs, args.batch_size, model_path, scaler_path)
-
-            with open(scaler_path, 'wb') as f:
-                pickle.dump(dataset_processor.scaler, f)
-            logging.info("Scaler успешно сохранен.")
-
-        except Exception as e:
-            logging.critical(f"Произошла ошибка в режиме обучения на датасете: {e}")
-
-    elif args.mode == 'dataset-test':
-        if not args.test_data_file or not os.path.exists(args.test_data_file):
-            logging.error(
-                "В режиме 'dataset-test' необходимо указать путь к файлу с данными для тестирования (--test-data-file).")
-            return
-
-        logging.info(f"Запуск программы в режиме тестирования на датасете: {args.test_data_file}")
-
-        if not detector.load_model(model_path) or not os.path.exists(scaler_path):
-            logging.error("Модель или scaler не найдены. Сначала запустите программу в режиме обучения на датасете.")
-            return
-
-        with open(scaler_path, 'rb') as f:
-            scaler_from_file = pickle.load(f)
-
-        try:
-            dataset_processor = CICIDSProcessor(scaler_from_file)
-            raw_data = dataset_processor.load_and_preprocess_training_data(args.test_data_file, fit_scaler=False)
-            if raw_data is None:
-                return
-
-            X_test = dataset_processor.create_sequences(raw_data, args.time_step)
-
-            for i in range(len(X_test)):
-                input_data = X_test[i:i + 1]
-                reconstruction_error = detector.calculate_reconstruction_error(input_data)
-                is_anomaly = reconstruction_error > args.threshold
-
-                status = "АНОМАЛИЯ ОБНАРУЖЕНА" if is_anomaly else "Данные обработаны"
-                logging.info(f"Статус: {status} | Ошибка реконструкции: {reconstruction_error:.4f}")
-
-                if is_anomaly:
-                    anomaly_event = {
-                        "gid": 1,
-                        "sid": 0,
-                        "rev": 0,
-                        "signature_msg": f"Anomaly detected on test dataset. Reconstruction error: {reconstruction_error:.4f}",
-                        "appearance_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "priority": 1,
-                        "source_ip": "N/A",
-                        "source_port": "N/A",
-                        "destination_ip": "N/A",
-                        "destination_port": "N/A",
-                        "packet_dump": ""
-                    }
-                    log_anomaly(anomaly_event)
-
-        except Exception as e:
-            logging.critical(f"Произошла ошибка в режиме тестирования на датасете: {e}")
 
 
 if __name__ == "__main__":

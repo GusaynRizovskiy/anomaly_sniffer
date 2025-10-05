@@ -1,9 +1,4 @@
 # anomaly_sniffer - руководство пользователя
-Для запуска через командную строку необходимо активировать виртуальное окружение
-Перейти в папку с проектом:
-cd C:\Users\spide\Pycharm_Projects\anomaly_sniffer
-Активация виртуального окружения
-.\.venv\Scripts\activate
 
 1. Режим сбора данных (collect)
 Этот режим предназначен для сбора сетевых метрик в течение определенного времени и сохранения их в файл. Собранные данные затем могут быть использованы для обучения модели в режиме train.
@@ -64,7 +59,7 @@ python main.py collect --interface <интерфейс> --network <сеть> --data-file <пут
 
 Быстрые команды для работы:
 1)Сбор трафика с интерфейса с указанием сети и указанием интервала захвата
-python main.py collect --interface "Realtek RTL8822CE 802.11ac PCIe Adapter" --network 192.168.1.0/24 --interval 4 --data-file normal_traffic.csv
+python main.py collect --interface "Realtek RTL8822CE 802.11ac PCIe Adapter" --network 192.168.1.0/24 --interval 4 --data-file normal_traffic_train.csv
 2)Обучение модели и ее дальнейшее сохранение(указывается файл для обучения)
 python main.py train --data-file normal_traffic.csv
 3)Для режима тестирования

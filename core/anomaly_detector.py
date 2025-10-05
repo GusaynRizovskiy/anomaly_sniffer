@@ -13,26 +13,38 @@ logger = logging.getLogger(__name__)
 
 
 class AnomalyDetector:
-    def __init__(self, time_step):
+    # ИЗМЕНЕНО: Добавлен num_features
+    def __init__(self, time_step, num_features=1):
         self.model = None
         self.time_step = time_step
+        # НОВОЕ: Сохраняем количество признаков
+        self.num_features = num_features
         self.loss_metric = mse_loss()
 
-    def build_model(self,num_features):
+    def build_model(self):
         """Создание архитектуры нейронной сети."""
-        inputs = Input(shape=(self.time_step, num_features))
+        # ИЗМЕНЕНО: Форма входного слоя теперь (time_step, num_features)
+        inputs = Input(shape=(self.time_step, self.num_features))
+
+        # Энкодер
         x = Conv1D(filters=32, kernel_size=3, padding='same', activation='relu')(inputs)
         x = LSTM(16, return_sequences=True, activation='relu')(x)
         x = LSTM(8, activation='relu')(x)
+
+        # Реконструктор
         x = RepeatVector(self.time_step)(x)
+
+        # Декодер
         x = LSTM(8, return_sequences=True, activation='relu')(x)
         x = LSTM(16, return_sequences=True, activation='relu')(x)
-        x = Conv1D(filters=1, kernel_size=3, padding='same', activation='linear')(x)
-        self.model = Model(inputs=inputs, outputs=x)
-        self.model.compile(optimizer='adam', loss='mean_squared_error')
-        logger.info("Архитектура модели создана.")
 
-    def train(self, X_train, epochs, batch_size, model_path, scaler_path):
+        # ИЗМЕНЕНО: Выходной Conv1D слой должен реконструировать num_features каналов
+        x = Conv1D(filters=self.num_features, kernel_size=3, padding='same', activation='linear')(x)
+
+        self.model = Model(inputs=inputs, outputs=x)
+        self.model.compile(optimizer='adam', loss=self.loss_metric)
+
+    def train_model(self, X_train, epochs, batch_size, model_path):
         """Обучение модели."""
         if self.model is None:
             self.build_model()
@@ -63,15 +75,43 @@ class AnomalyDetector:
             return 0
 
         reconstruction = self.model.predict(X, verbose=0)
+        # Для многомерных данных mse - это средняя ошибка по всем time_step и num_features
         mse = self.loss_metric(X, reconstruction).numpy()
         return mse
 
     def load_model(self, model_path):
         """Загрузка обученной модели."""
         try:
-            self.model = load_model(model_path)
-            logger.info("Модель успешно загружена.")
-            return True
+            # Для корректной загрузки модели Keras часто не нужно явно указывать loss,
+            # но для автокодировщика это может быть полезно
+            self.model = load_model(
+                model_path,
+                custom_objects={'mse_loss': mse_loss()}
+            )
+            logger.info("Модель загружена.")
         except Exception as e:
-            logger.error(f"Не удалось загрузить модель: {e}")
-            return False
+            logger.error(f"Не удалось загрузить модель с {model_path}: {e}")
+            self.model = None
+
+    def save_scaler(self, scaler, scaler_path):
+        """Сохранение объекта нормализатора."""
+        try:
+            with open(scaler_path, 'wb') as f:
+                pickle.dump(scaler, f)
+            logger.info(f"Нормализатор сохранен в {scaler_path}")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения нормализатора: {e}")
+
+    def load_scaler(self, scaler_path):
+        """Загрузка объекта нормализатора."""
+        try:
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+            logger.info(f"Нормализатор загружен из {scaler_path}")
+            return scaler
+        except FileNotFoundError:
+            logger.error(f"Файл нормализатора не найден: {scaler_path}")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка загрузки нормализатора: {e}")
+            return None
