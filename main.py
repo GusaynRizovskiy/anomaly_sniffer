@@ -162,13 +162,34 @@ def run_file_validation(args, processor, detector):
         logger.error(f"Не удалось загрузить файл порога: {e}")
         return
 
-    # 2. Чтение CSV
+    # 2. Чтение CSV (ИСПРАВЛЕНО)
     try:
-        df = pd.read_csv(args.data_file)
-        # Удаляем timestamp, если он есть в первом столбце
-        if 'timestamp' in df.columns[0].lower() or 'time' in df.columns[0].lower():
+        # Добавлено sep=None, engine='python' для автоматического определения разделителя (; или ,)
+        df = pd.read_csv(args.data_file, sep=None, engine='python')
+
+        # Логируем, что мы на самом деле прочитали
+        logger.info(f"Прочитано: строк={df.shape[0]}, столбцов={df.shape[1]}")
+
+        # Проверка на "склеившиеся" столбцы
+        if df.shape[1] < 2:
+            logger.error(f"ОШИБКА: Обнаружено всего {df.shape[1]} столбцов. Вероятно, неверный разделитель в CSV.")
+            logger.error(f"Первые 5 строк файла:\n{df.head()}")
+            return
+
+        # Удаляем timestamp (первый столбец), если он похож на время
+        # Или просто удаляем 1-й столбец, если их на 1 больше, чем нужно признаков
+        first_col = df.columns[0].lower()
+        if 'time' in first_col or 'date' in first_col or 'timestamp' in first_col:
             df = df.iloc[:, 1:]
-        logger.info(f"Загружено строк: {len(df)}")
+            logger.info("Первый столбец удален (считаем его timestamp).")
+
+        # Проверка соответствия количеству признаков (должно быть 26)
+        # processor.scaler.n_features_in_ хранит сколько признаков было при обучении
+        expected_features = processor.scaler.n_features_in_
+        if df.shape[1] != expected_features:
+            logger.error(f"НЕСОВПАДЕНИЕ ПРИЗНАКОВ: В файле {df.shape[1]} столбцов, а модель ждет {expected_features}.")
+            return
+
     except Exception as e:
         logger.error(f"Ошибка чтения файла: {e}")
         return
@@ -177,7 +198,7 @@ def run_file_validation(args, processor, detector):
     try:
         scaled_data = processor.scaler.transform(df)
     except Exception as e:
-        logger.error(f"Ошибка масштабирования. Проверьте соответствие столбцов! {e}")
+        logger.error(f"Ошибка масштабирования. Убедитесь, что в файле только числа! {e}")
         return
 
     # 4. Создание окон
@@ -188,26 +209,29 @@ def run_file_validation(args, processor, detector):
 
     logger.info(f"Сформировано окон для анализа: {len(X_val)}")
 
-    # 5. Пакетное предсказание (Batch Prediction)
+    # 5. Пакетное предсказание
     logger.info("Выполняется предсказание нейросети...")
-    reconstructions = detector.model.predict(X_val, verbose=1)
+    try:
+        reconstructions = detector.model.predict(X_val, verbose=1)
 
-    # Расчет MSE (Mean Squared Error) для каждого окна
-    mse_errors = np.mean(np.power(X_val - reconstructions, 2), axis=(1, 2))
+        # Расчет MSE
+        mse_errors = np.mean(np.power(X_val - reconstructions, 2), axis=(1, 2))
 
-    # 6. Поиск аномалий
-    anomalies_idx = np.where(mse_errors > threshold_val)[0]
-    num_anomalies = len(anomalies_idx)
+        # 6. Поиск аномалий
+        anomalies_idx = np.where(mse_errors > threshold_val)[0]
+        num_anomalies = len(anomalies_idx)
 
-    print("\n" + "=" * 40)
-    print(f"РЕЗУЛЬТАТЫ ВАЛИДАЦИИ")
-    print(f"Всего проверено окон: {len(mse_errors)}")
-    print(f"Найдено аномалий: {num_anomalies}")
-    print(f"Процент аномалий:   {(num_anomalies / len(mse_errors)) * 100:.2f}%")
-    print("=" * 40 + "\n")
+        # Вывод результатов в консоль
+        print("\n" + "=" * 40)
+        print(f"РЕЗУЛЬТАТЫ ВАЛИДАЦИИ")
+        print(f"Файл: {args.data_file}")
+        print(f"Всего проверено окон: {len(mse_errors)}")
+        print(f"Обнаружено аномалий: {num_anomalies}")
+        print(f"Процент аномалий:   {(num_anomalies / len(mse_errors)) * 100:.2f}%")
+        print("=" * 40 + "\n")
 
-    # Вся логика графиков удалена
-
+    except Exception as e:
+        logger.error(f"Ошибка при расчете: {e}")
 
 def main():
     global data_buffer, threshold
