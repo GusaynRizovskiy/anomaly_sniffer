@@ -47,13 +47,28 @@ class DataProcessor:
     def load_and_preprocess_training_data(self, file_path, fit_scaler=True):
         """Загрузка и нормализация данных для обучения."""
         try:
-            data = pd.read_csv(file_path, delimiter=',')
+            # ИЗМЕНЕНИЕ 1: sep=None и engine='python' позволяют Pandas самому найти разделитель (, или ;)
+            data = pd.read_csv(file_path, sep=None, engine='python')
+
+            logger.info(f"Загружен файл: {file_path}. Размер: {data.shape}")
+
+            # Диагностика: если столбцов мало, покажем, что считалось
             if data.shape[1] <= 1:
-                logger.error("Не удалось загрузить данные из файла. Убедитесь, что файл имеет правильный формат CSV.")
+                logger.error(f"ОШИБКА: Найдено столбцов: {data.shape[1]}. Ожидалось > 1.")
+                logger.error(f"Пример данных: {data.head()}")
+                logger.error("Проверьте разделитель в CSV файле.")
                 return None
 
-            # Удаляем столбец с датой/временем, если он есть
-            data = data.iloc[:, 1:]
+            # Удаляем столбец с датой/временем, если он есть (по названию или индексу)
+            # Проверяем, похож ли первый столбец на timestamp
+            first_col = data.columns[0].lower()
+            if 'time' in first_col or 'date' in first_col:
+                data = data.iloc[:, 1:]
+
+            # Дополнительная проверка: остались ли данные после удаления времени
+            if data.shape[1] == 0:
+                logger.error("После удаления метки времени не осталось данных.")
+                return None
 
             # Нормализация
             if fit_scaler or self.scaler is None:
