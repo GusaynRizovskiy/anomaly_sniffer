@@ -97,7 +97,7 @@ class Sniffer:
 
             start_time = time.time()
             sniff(
-                #filter=f"net {self.network_cidr}",
+                filter=f"net {self.network_cidr}",
                 iface=self.interface,
                 prn=self.packet_callback,
                 store=False,
