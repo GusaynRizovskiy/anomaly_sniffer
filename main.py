@@ -37,7 +37,7 @@ data_buffer = collections.deque(maxlen=None)
 threshold = None
 
 
-def log_anomaly(anomaly_data):
+def log_anomaly(anomaly_data, event_type="NETWORK_ANOMALY_DETECTED"):
     """Запись данных об аномалии в JSON-файл."""
     try:
         log_dir = "logs"
@@ -47,16 +47,19 @@ def log_anomaly(anomaly_data):
 
         record = {
             "timestamp": datetime.now().isoformat(),
-            "level": "CRITICAL",
-            "event_id": "NETWORK_ANOMALY_DETECTED",
-            "description": "Обнаружена сетевая аномалия",
+            "level": "CRITICAL",  # Можно менять на INFO для валидации, если хочешь
+            "event_id": event_type,  # <--- ТЕПЕРЬ МЫ МОЖЕМ ЭТО МЕНЯТЬ
+            "description": "Обнаружена аномалия (валидация файла)" if event_type == "OFFLINE_VALIDATION" else "Обнаружена сетевая аномалия",
             "details": anomaly_data
         }
 
         with open(filepath, 'a', encoding='utf-8') as f:
             f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
-        logger.warning(f"!!! АНОМАЛИЯ ЗАПИСАНА: MSE: {anomaly_data['mse_error']:.4f}")
+        # Убрал лишний warning для валидации, чтобы не засорять консоль тысячами строк
+        if event_type != "OFFLINE_VALIDATION":
+            logger.warning(f"!!! АНОМАЛИЯ ЗАПИСАНА: MSE: {anomaly_data['mse_error']:.4f}")
+
     except Exception as e:
         logger.error(f"Ошибка при записи лога аномалии: {e}")
 
@@ -220,6 +223,27 @@ def run_file_validation(args, processor, detector):
         # 6. Поиск аномалий
         anomalies_idx = np.where(mse_errors > threshold_val)[0]
         num_anomalies = len(anomalies_idx)
+        # --- НОВЫЙ БЛОК: Сохранение в JSON ---
+        if num_anomalies > 0:
+            logger.info(f"Сохранение {num_anomalies} событий в JSON лог...")
+
+            for idx in anomalies_idx:
+                # idx - это номер окна. В файле это примерно (idx + time_step) строка.
+
+                # Формируем данные для лога
+                anomaly_info = {
+                    "source_file": args.data_file,  # Из какого файла взято
+                    "window_index": int(idx),  # Номер окна по порядку
+                    "mse_error": float(mse_errors[idx]),  # Ошибка
+                    "threshold": float(threshold_val)  # Порог
+                    # "raw_metrics": ... (сложно получить, опускаем)
+                }
+
+                # Пишем с пометкой OFFLINE
+                log_anomaly(anomaly_info, event_type="OFFLINE_VALIDATION")
+
+            logger.info("Сохранение завершено.")
+        # -------------------------------------
 
         # Вывод результатов в консоль
         print("\n" + "=" * 40)
