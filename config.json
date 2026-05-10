@@ -2,8 +2,8 @@
     "server": {
         "ip": "185.22.155.17",
         "port": 9000,
-        "login": "test-ids",
-        "password": "!QAZ2wsx",
+        "login": "my-ids",
+        "password": "12345678",
         "type": "sensor-user"
     },
     "settings": {

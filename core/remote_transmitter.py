@@ -106,28 +106,6 @@ class RemoteTransmitter:
         except Exception as e:
             logger.error(f"Ошибка при попытке выхода: {e}")
 
-    def authenticate(self):
-        """Получение accessToken через REST API."""
-        try:
-            url = f"{self.base_url}/api/auth/login"
-            payload = {
-                "login": self.login,
-                "password": self.password,
-                "type": "sensor-user"
-            }
-            # verify=False для самоподписанных сертификатов
-            response = requests.post(url, json=payload, verify=False, timeout=5)
-            if response.status_code == 200:
-                self.token = response.json().get('accessToken')
-                logger.info("Успешная аутентификация на удаленном сервере.")
-                return True
-            else:
-                logger.error(f"Ошибка аутентификации: {response.status_code}")
-                return False
-        except Exception as e:
-            logger.error(f"Не удалось связаться с сервером аутентификации: {e}")
-            return False
-
     def connect_ws(self):
         """Установка WebSocket соединения."""
         if not self.token:
