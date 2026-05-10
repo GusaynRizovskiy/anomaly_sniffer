@@ -1,0 +1,14 @@
+{
+    "server": {
+        "ip": "185.22.155.17",
+        "port": 9000,
+        "login": "test-ids",
+        "password": "!QAZ2wsx",
+        "type": "sensor-user"
+    },
+    "settings": {
+        "log_file_path": "logs/online",
+        "scan_interval_seconds": 5,
+        "delete_after_send": false
+    }
+}
