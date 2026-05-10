@@ -320,7 +320,7 @@ def log_anomaly(anomaly_data, event_type="NETWORK_ANOMALY_DETECTED", args=None, 
             sent_success = False
 
             if transmitter:
-                print(f"[NETWORK] Попытка отправки на сервер {args.server_url}...")
+                print(f"[NETWORK] Попытка отправки на сервер ...")
                 # Передаем исходные данные аномалии (или record, если сервер ждет его)
                 sent_success = transmitter.send_event(anomaly_data)
 
@@ -652,15 +652,16 @@ def main():
     detector = AnomalyDetector(time_step=args.time_step, num_features=len(HEADERS))
 
     # Инициализируем передатчик, если указаны параметры
-    transmitter = None
-    if args.remote_host:
-        transmitter = RemoteTransmitter(
-            base_url=f"https://{args.remote_host}:{args.remote_port}",
-            # Используем os.getenv. Второй аргумент — значение по умолчанию,
-            # если в .env ничего не найдется.
-            login=os.getenv("REMOTE_LOGIN", "test-ids"),
-            password=os.getenv("REMOTE_PASSWORD", "!QAZ2wsx")
-        )
+    try:
+        with open('config.json', 'r') as f:
+            cfg = json.load(f)['server']
+
+        base_url = f"https://{cfg['ip']}:{cfg['port']}"
+        transmitter = RemoteTransmitter(base_url, cfg['login'], cfg['password'], cfg['type'])
+    except FileNotFoundError:
+        print("[ERROR] Файл config.json не найден.")
+    except Exception as e:
+        print(f"[ERROR] Ошибка при чтении конфига: {e}")
 
     if args.mode == 'detect-offline':
         # Переименованный режим validate
@@ -700,7 +701,7 @@ def main():
 
             if transmitter.authenticate():
 
-                print(f"      - Соединение установлено: {args.server_url}")
+                print(f"      - Соединение установлено: {base_url}")
 
                 print(f"      - Аутентификация пройдена. Токен получен.")
 

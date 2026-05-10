@@ -2,7 +2,6 @@ import json
 import logging
 from remote_transmitter import RemoteTransmitter
 
-
 def test_config():
     try:
         with open('config.json', 'r') as f:

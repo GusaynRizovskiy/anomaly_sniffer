@@ -129,6 +129,7 @@ class RemoteTransmitter:
             )
             print("[SUCCESS] WebSocket соединение успешно установлено!")
             logger.info("WebSocket соединение установлено.")
+            return True
 
         except websocket.WebSocketConnectionClosedException:
             print("[ERROR] Сервер принудительно закрыл WebSocket соединение сразу после подключения.")
