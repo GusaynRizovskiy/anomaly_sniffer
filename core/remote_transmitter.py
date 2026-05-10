@@ -4,6 +4,7 @@ import requests
 import websocket
 import logging
 import os
+import ssl
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -107,21 +108,38 @@ class RemoteTransmitter:
             logger.error(f"Ошибка при попытке выхода: {e}")
 
     def connect_ws(self):
-        """Установка WebSocket соединения."""
+        """Установка WebSocket соединения с детальной диагностикой."""
         if not self.token:
             if not self.authenticate():
+                print("[FAIL] Не удалось получить токен для WebSocket.")
                 return
 
         # Формируем URL динамически на основе base_url
         ws_url = f"wss://{self.raw_url}/integrated-container-ids/connection-integrated-container-ids?token={self.token}"
+
+        print(f"\n[*] Попытка установить WebSocket соединение...")
+        print(f"[*] URL: {ws_url}")
+
         try:
+            # Используем стандартный ssl.CERT_NONE вместо несуществующего websocket.ssl
             self.ws = websocket.create_connection(
                 ws_url,
-                sslopt={"cert_reqs": websocket.ssl.CERT_NONE},
-                timeout=5
+                sslopt={"cert_reqs": ssl.CERT_NONE},  # <- ИСПРАВЛЕНО ТУТ
+                timeout=7
             )
+            print("[SUCCESS] WebSocket соединение успешно установлено!")
             logger.info("WebSocket соединение установлено.")
+
+        except websocket.WebSocketConnectionClosedException:
+            print("[ERROR] Сервер принудительно закрыл WebSocket соединение сразу после подключения.")
+        except websocket.WebSocketTimeoutException:
+            print("[ERROR] Превышено время ожидания (Timeout) при попытке установить WebSocket соединение.")
+        except ConnectionRefusedError:
+            print(
+                f"[ERROR] Соединение отклонено сервером. Проверьте, запущен ли WebSocket-сервер на порту {self.raw_url.split(':')[-1]}")
         except Exception as e:
+            # Выводим тип ошибки и её описание для точечной диагностики
+            print(f"[ERROR] Непредвиденная ошибка WebSocket ({type(e).__name__}): {e}")
             logger.error(f"Ошибка WebSocket: {e}")
             self.ws = None
 
