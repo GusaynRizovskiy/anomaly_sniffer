@@ -164,29 +164,34 @@ class RemoteTransmitter:
                 ctx = internal_anomaly_data.get('network_context', {})
 
                 # Формируем структуру как на сервере
-                event = {
-                    "type": "integratedContainerIds/transmittingEvents",
-                    "transmittingEvents": [
-                        {
-                            "event_type": "alert",
-                            "timestamp": datetime.now().isoformat(),
-                            "src_ip": ctx.get('src_ip', '0.0.0.0'),
-                            "src_port": int(ctx.get('src_port', 0)),
-                            "dest_ip": ctx.get('dst_ip', '0.0.0.0'),
-                            "dest_port": int(ctx.get('dst_port', 0)),
-                            "proto": ctx.get('protocol', 'TCP'),
-                            "signature": f"Anomaly Detected (Score: {internal_anomaly_data.get('anomaly_score', 0)}%)",
-                            "severity": severity_map.get(level, 1),
-                            "category": "Network Anomaly"
-                        }
-                    ]
+                # ==========================================================
+                # ФОРМИРУЕМ НОВУЮ СТРУКТУРУ ДАННЫХ (ОБНОВЛЕНО)
+                # Поля, которые мы не знаем (gid, rev, flow_id и т.д.),
+                # согласно рекомендации, оставляем пустыми (None или "").
+                # ==========================================================
+                event_payload = {
+                    "main": {
+                        "m.gid": None,  # Неизвестно сенсору
+                        "m.signature_id": 1,  # ID типа сигнатуры (можно зашить 1 для аномалий)
+                        "m.rev": None,  # Ревизия (неизвестно)
+                        "m.category": "Network Anomaly",
+                        "m.signature": f"Anomaly Detected (Score: {internal_anomaly_data.get('anomaly_score', 0)}%)",
+                        "m.ts": datetime.now().isoformat(),  # Текущее время
+                        "m.flow_id": None,  # ID потока (неизвестно без DPI)
+                        "m.severity": severity_map.get(level, 1),
+                        "m.proto": ctx.get('protocol', 'TCP').upper(),
+                        "m.src_ip": ctx.get('src_ip', '0.0.0.0'),
+                        "m.src_port": int(ctx.get('src_port', 0)),
+                        "m.dest_ip": ctx.get('dst_ip', '0.0.0.0'),  # Обратите внимание: dest_ip, а не dst_ip
+                        "m.dest_port": int(ctx.get('dst_port', 0))
+                    }
                 }
+                # Отправляем JSON
+                self.ws.send(json.dumps(event_payload))
+                # ==========================================================
                 # ИНФОРМАТИВНОЕ СООБЩЕНИЕ ДЛЯ КОНСОЛИ
                 print(
                     f"[SERVER SUCCESS] [{datetime.now().strftime('%H:%M:%S')}] Событие успешно передано на SIEM-сервер.")
-
-                logger.info("Событие успешно отправлено на сервер.")
-                self.ws.send(json.dumps(event))
                 logger.info("Событие успешно отправлено на сервер.")
                 return True # Успешно отправлено
             return False # WebSocket не подключен
