@@ -5,18 +5,18 @@ import sys
 from datetime import datetime
 from prettytable import PrettyTable
 
-# Добавляем текущую директорию в путь, чтобы Python видел папку core
+# Добавляем текущую директорию в путь поиска, чтобы Python видел папку core
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from core.remote_transmitter import RemoteTransmitter
 except ImportError as e:
-    print(f"[ERROR] Не удалось импортировать core. Убедитесь, что скрипт в корне проекта. {e}")
+    print(f"[ERROR] Не удалось импортировать core. Убедитесь, что скрипт находится в корне проекта. {e}")
     sys.exit(1)
 
 
 def load_config(config_path="config.json"):
-    """Загрузка конфигурации."""
+    """Загрузка конфигурационного файла."""
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
@@ -30,51 +30,68 @@ def load_config(config_path="config.json"):
 
 def print_attacks_table(attacks):
     """Красивый вывод списка атак в таблицу."""
-    os.system('cls' if os.name == 'nt' else 'clear')  # Очистка экрана
+    # Оставляем очистку экрана закомментированной для сохранения логов отладки.
+    # Если вы хотите, чтобы экран очищался при каждом обновлении, раскомментируйте строку ниже:
+    # os.system('cls' if os.name == 'nt' else 'clear')
 
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    print("\n" + "=" * 95)
     print(f"=== МОНИТОРИНГ АТАК SIEM GuardianX (Обновлено: {now_str}) ===")
+    print("=" * 95)
 
     if not attacks:
-        print("\n[INFO] Атак за последние 30 минут не обнаружено (или ошибка API).")
+        print("\n[INFO] Атак за последние 30 минут не обнаружено (или пустой ответ API).")
         return
 
     # Создаем таблицу
     table = PrettyTable()
-    # Названия колонок (берем из вашей структуры JSON)
-    table.field_names = ["ID", "Время (TS)", "Сигнатура", "Severity", "Proto", "Src IP:Port", "Dest IP:Port"]
+    table.field_names = ["ID", "Время (TS)", "Сигнатура", "Приоритет", "Протокол", "Источник (IP:Порт)",
+                         "Назначение (IP:Порт)"]
 
-    # Настройка выравнивания
+    # Настройка выравнивания колонок
     table.align["Сигнатура"] = "l"  # По левому краю
-    table.align["Src IP:Port"] = "l"
-    table.align["Dest IP:Port"] = "l"
+    table.align["Источник (IP:Порт)"] = "l"
+    table.align["Назначение (IP:Порт)"] = "l"
 
     for attack in attacks:
-        # Извлекаем данные, безопасно обрабатывая отсутствие ключей
-        m = attack.get('main', attack)  # Если структура плоская, берем сам объект
+        # Так как структура ответа плоская, данные забираем напрямую из объекта 'attack'
 
-        # Форматируем время для читаемости (если оно в ISO)
-        ts = m.get('m.ts', '')
-        if ts and 'T' in ts:
-            ts = ts.split('T')[1].split('.')[0]  # Оставляем только ЧЧ:ММ:СС
+        # 1. Форматирование времени (извлекаем ЧЧ:ММ:СС из ISO-строки "2026-05-11T13:22:02.056Z")
+        ts_raw = attack.get('appearance_time', '')
+        ts = 'N/A'
+        if ts_raw and 'T' in ts_raw:
+            try:
+                ts = ts_raw.split('T')[1].split('.')[0]
+            except Exception:
+                ts = ts_raw
 
-        # Форматируем IP:Port
-        src = f"{m.get('m.src_ip', '0.0.0.0')}:{m.get('m.src_port', 0)}"
-        dest = f"{m.get('m.dest_ip', '0.0.0.0')}:{m.get('m.dest_port', 0)}"
+        # 2. Форматирование IP-адресов и портов источника и назначения
+        src_ip = attack.get('source_ip', '0.0.0.0')
+        src_port = attack.get('source_port', '0')
+        src = f"{src_ip}:{src_port}"
 
-        severity = m.get('m.severity', 1)
-        sev_str = "INFO"
-        if severity == 3:
-            sev_str = "CRITICAL"
-        elif severity == 2:
-            sev_str = "WARNING"
+        dest_ip = attack.get('destination_ip', '0.0.0.0')
+        dest_port = attack.get('destination_port', '0')
+        dest = f"{dest_ip}:{dest_port}"
 
+        # 3. Маппинг уровней приоритета (поле 'priority')
+        priority_raw = str(attack.get('priority', '1'))
+        if priority_raw == '1':
+            priority_str = "CRITICAL"
+        elif priority_raw == '2':
+            priority_str = "WARNING"
+        elif priority_raw == '3':
+            priority_str = "INFO"
+        else:
+            priority_str = f"LOW ({priority_raw})"
+
+        # 4. Добавление собранной строки в таблицу
         table.add_row([
-            m.get('id', 'N/A'),  # ID обычно присваивает БД сервера
+            attack.get('id', 'N/A'),
             ts,
-            m.get('m.signature', 'Unknown')[:30],  # Обрезаем длинные сигнатуры
-            sev_str,
-            m.get('m.proto', 'TCP'),
+            attack.get('signature_msg', 'Unknown')[:45],  # Ограничиваем длину сигнатуры до 45 символов для читаемости
+            priority_str,
+            attack.get('proto', 'TCP'),
             src,
             dest
         ])
@@ -84,24 +101,20 @@ def print_attacks_table(attacks):
 
 
 def main():
-    # 1. Загружаем общую конфигурацию
+    # 1. Загружаем конфигурацию
     config = load_config()
-
-    # Выделяем секцию сервера для удобства
     srv_cfg = config.get('server', {})
 
     # 2. Формируем базовый URL
-    # Проверяем наличие необходимых ключей
     ip = srv_cfg.get('ip')
     port = srv_cfg.get('port')
     if not ip or not port:
-        print("[ERROR] В config.json отсутствуют ip или port в секции 'server'.")
+        print("[ERROR] В config.json отсутствуют 'ip' или 'port' в секции 'server'.")
         return
 
     base_url = f"https://{ip}:{port}"
 
-    # 3. Инициализируем передатчик ОДИН РАЗ со всеми аргументами
-    # ВАЖНО: передаем user_type из конфига (ключ 'type')
+    # 3. Инициализируем передатчик
     transmitter = RemoteTransmitter(
         base_url=base_url,
         login=srv_cfg.get('login'),
@@ -113,7 +126,7 @@ def main():
 
     # 4. Проходим аутентификацию
     if not transmitter.authenticate():
-        print("[FAIL] Не удалось авторизоваться на сервере API. Проверьте логин/пароль в config.json.")
+        print("[FAIL] Не удалось авторизоваться на сервере API. Проверьте параметры в config.json.")
         return
 
     print("[SUCCESS] Авторизация пройдена. Начинаем мониторинг истории атак.")
@@ -122,22 +135,18 @@ def main():
     # 5. Бесконечный цикл мониторинга
     try:
         while True:
-            # Запрашиваем историю за последние 30 минут
+            # Запрашиваем историю атак за последние 30 минут
             attacks = transmitter.get_attack_history(minutes_back=30)
 
-            # Выводим таблицу
+            # Выводим обновленные данные
             print_attacks_table(attacks)
 
-            # Ждем 10 секунд перед следующим обновлением
+            # Опрашиваем API раз в 10 секунд
             time.sleep(10)
     except KeyboardInterrupt:
         print("\n[*] Мониторинг остановлен пользователем.")
     except Exception as e:
         print(f"\n[CRITICAL ERROR] Произошла ошибка в цикле мониторинга: {e}")
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":

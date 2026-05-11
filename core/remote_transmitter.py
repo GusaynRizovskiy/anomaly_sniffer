@@ -31,83 +31,92 @@ class RemoteTransmitter:
         return "INFO"
 
     def get_attack_history(self, minutes_back=30):
-        """
-        Запрашивает с сервера ретроспективу атак через HTTP API.
-        Возвращает список атак или пустой список при ошибке.
-        """
-        # 1. Проверка токена
         if not self.token:
-            # Пытаемся авторизоваться, если токена нет
-            if not self.authenticate():
-                logger.error("API History: Нет токена и не удалось авторизоваться.")
-                return []
+            print("[CRITICAL] Нет токена! Проверьте авторизацию.")
+            return []
 
-        # 2. Настройка URL и заголовков
         api_url = f"{self.base_url}/api/charts/get-attack-retrospective"
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json"
         }
 
-        # 3. Формирование времени (UTC)
-        # Сервер ждет формат ISO 8601 с 'Z' в конце
+        # Генерируем корректные временные метки (как в успешном ТЕСТЕ 1)
         now = datetime.utcnow()
-        start_time = now - timedelta(minutes=minutes_back)
+        start_time = now - timedelta(minutes=int(minutes_back))
 
-        # 4. Формирование тела запроса (BODY) по вашей спецификации
+        def format_ts_simple(dt):
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
         payload = {
             "filters": {
                 "unitType": "minute",
-                "unitValue": str(minutes_back),
-                "tsEnd": now.isoformat() + "Z",  # Время КОНЦА
-                "tsStart": start_time.isoformat() + "Z",  # Время НАЧАЛА
+                "unitValue": int(minutes_back),  # Передаем строго как int
+                "tsEnd": format_ts_simple(now),
+                "tsStart": format_ts_simple(start_time),
                 "groupSensorsIDSelected": []
             },
             "params": {
                 "sortBy": "id",
-                "sortDir": "DESC",  # DESC - чтобы новые были сверху
+                "sortDir": "DESC",
                 "page": 1,
-                "pageSize": 20,  # Берем последние 20
+                "pageSize": 50,
                 "search": ""
             }
         }
 
         try:
-            # 5. Делаем POST запрос
-            response = requests.post(
-                api_url,
-                json=payload,
-                headers=headers,
-                verify=False,  # Игнорируем самоподписанный сертификат
-                timeout=10
-            )
+            response = requests.post(api_url, json=payload, headers=headers, verify=False, timeout=15)
 
-            if response.status_code == 200:
-                data = response.json()
-                # Обычно данные лежат в ключе, например 'items', 'data' или 'content'.
-                # Исходя из params.page, сервер должен возвращать структуру с пагинацией.
-                # Предположим, список лежит в data['items'] или в корне ответа.
-
-                # Попробуем найти список атак
-                attacks = []
-                if isinstance(data, list):
-                    attacks = data
-                elif isinstance(data, dict):
-                    attacks = data.get('items', data.get('data', []))
-
-                return attacks
-
-            elif response.status_code == 401:
-                logger.warning("API History: Токен протух, сбрасываем.")
-                self.token = None  # Сбрасываем токен, чтобы при следующем вызове переавторизоваться
+            if response.status_code != 200:
+                print(f"[API ERROR] Статус: {response.status_code}, Ответ: {response.text}")
                 return []
-            else:
-                logger.error(f"API History Ошибка: {response.status_code}, Ответ: {response.text}")
-                return []
+
+            raw_json = response.json()
+
+            if isinstance(raw_json, dict):
+                data = raw_json.get('rows')
+
+                if data is None:
+                    data = raw_json.get('items') or raw_json.get('data') or raw_json.get('content')
+
+                if data is None:
+                    print(f"[API DEBUG] Не удалось найти список событий. Ключи в ответе: {list(raw_json.keys())}")
+                    return []
+
+                print(f"[API DEBUG] Получено записей из 'rows': {len(data)}")
+
+                # ================= ВРЕМЕННЫЙ ДЕБАГ КЛЮЧЕЙ =================
+                if len(data) > 0:
+                    print("\n[API DEBUG] === СТРУКТУРА ОДНОГО СОБЫТИЯ ОТ СЕРВЕРА ===")
+                    print(json.dumps(data[0], indent=4, ensure_ascii=False))
+                    print("====================================================\n")
+                # ==========================================================
+
+                return data
+
+            elif isinstance(raw_json, list):
+                return raw_json
+
+            return []
 
         except Exception as e:
-            logger.error(f"Исключение при запросе к API истории: {e}")
+            print(f"[API ERROR] Ошибка при запросе истории: {e}")
             return []
+
+    def _parse_diagnostic_response(self, raw_json):
+        """Вспомогательный метод разбора ответа"""
+        if isinstance(raw_json, dict):
+            # Проверяем ключи, в которых SIEM обычно возвращает массивы
+            data = raw_json.get('items') or raw_json.get('data') or raw_json.get('content') or raw_json.get('results')
+            if data is not None:
+                return data
+            # Если ключей нет, проверим структуру
+            print(f"[API DEBUG] Нетипичная структура словаря. Ключи: {list(raw_json.keys())}")
+        elif isinstance(raw_json, list):
+            return raw_json
+        return None
+
 
     def authenticate(self):
         """Получение accessToken через REST API с детальной обработкой ошибок."""
@@ -225,10 +234,11 @@ class RemoteTransmitter:
             self.ws = None
 
     def send_event(self, internal_anomaly_data):
-        """Преобразование внутреннего формата в формат сервера и отправка. Возвращает True/False."""
-        # 1. Если нет токена (не прошли аутентификацию), сразу выходим
-        if not self.token:
-            return False
+        """
+        Отправка события через WebSocket.
+        Удаляет пустые поля и использует префикс 'm.' для ключей.
+        """
+        if not self.token: return False
 
         try:
             if not self.ws or not hasattr(self.ws, 'connected') or not self.ws.connected:
@@ -236,46 +246,34 @@ class RemoteTransmitter:
 
             if self.ws and self.ws.connected:
                 severity_map = {"CRITICAL": 3, "WARNING": 2, "INFO": 1}
-                level = self._get_severity_local(
-                    internal_anomaly_data['mse_error'],
-                    internal_anomaly_data['threshold']
-                )
-
                 ctx = internal_anomaly_data.get('network_context', {})
 
-                # Формируем структуру как на сервере
-                # ==========================================================
-                # ФОРМИРУЕМ НОВУЮ СТРУКТУРУ ДАННЫХ (ОБНОВЛЕНО)
-                # Поля, которые мы не знаем (gid, rev, flow_id и т.д.),
-                # согласно рекомендации, оставляем пустыми (None или "").
-                # ==========================================================
-                event_payload = {
-                    "main": {
-                        "m.gid": None,  # Неизвестно сенсору
-                        "m.signature_id": 1,  # ID типа сигнатуры (можно зашить 1 для аномалий)
-                        "m.rev": None,  # Ревизия (неизвестно)
-                        "m.category": "Network Anomaly",
-                        "m.signature": f"Anomaly Detected (Score: {internal_anomaly_data.get('anomaly_score', 0)}%)",
-                        "m.ts": datetime.now().isoformat(),  # Текущее время
-                        "m.flow_id": None,  # ID потока (неизвестно без DPI)
-                        "m.severity": severity_map.get(level, 1),
-                        "m.proto": ctx.get('protocol', 'TCP').upper(),
-                        "m.src_ip": ctx.get('src_ip', '0.0.0.0'),
-                        "m.src_port": int(ctx.get('src_port', 0)),
-                        "m.dest_ip": ctx.get('dst_ip', '0.0.0.0'),  # Обратите внимание: dest_ip, а не dst_ip
-                        "m.dest_port": int(ctx.get('dst_port', 0))
-                    }
+                # Собираем данные
+                m_data = {
+                    "m.signature_id": 1,
+                    "m.category": "Network Anomaly",
+                    "m.signature": f"Anomaly Detected ({internal_anomaly_data.get('anomaly_score', 0)}%)",
+                    "m.ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                    "m.severity": severity_map.get(self._get_severity_local(internal_anomaly_data['mse_error'],
+                                                                            internal_anomaly_data['threshold']), 1),
+                    "m.proto": ctx.get('protocol', 'TCP').upper(),
+                    "m.src_ip": ctx.get('src_ip', '0.0.0.0'),
+                    "m.src_port": int(ctx.get('src_port', 0)),
+                    "m.dest_ip": ctx.get('dst_ip', '0.0.0.0'),
+                    "m.dest_port": int(ctx.get('dst_port', 0))
                 }
-                # Отправляем JSON
+
+                # ФИЛЬТРАЦИЯ: Удаляем ключи, где значение None или пустая строка
+                # (Согласно требованию: "поля, которые не можешь заполнить, просто не передавай")
+                m_filtered = {k: v for k, v in m_data.items() if v is not None and v != ""}
+
+                event_payload = {"main": m_filtered}
+
                 self.ws.send(json.dumps(event_payload))
-                # ==========================================================
-                # ИНФОРМАТИВНОЕ СООБЩЕНИЕ ДЛЯ КОНСОЛИ
-                print(
-                    f"[SERVER SUCCESS] [{datetime.now().strftime('%H:%M:%S')}] Событие успешно передано на SIEM-сервер.")
-                logger.info("Событие успешно отправлено на сервер.")
-                return True # Успешно отправлено
-            return False # WebSocket не подключен
+                print(f"[SERVER SUCCESS] Событие отправлено: {m_filtered['m.signature']}")
+                return True
+            return False
         except Exception as e:
-            logger.error(f"Ошибка при отправке через WS: {e}")
+            logger.error(f"Ошибка WebSocket: {e}")
             self.ws = None
-            return False # Произошла ошибка
+            return False
