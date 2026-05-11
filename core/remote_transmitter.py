@@ -250,10 +250,13 @@ class RemoteTransmitter:
 
                 # Собираем данные
                 m_data = {
+                    "m.gid":None,
                     "m.signature_id": 1,
+                    "m.rev":None,
                     "m.category": "Network Anomaly",
                     "m.signature": f"Anomaly Detected ({internal_anomaly_data.get('anomaly_score', 0)}%)",
                     "m.ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                    "m.flow_id":None,
                     "m.severity": severity_map.get(self._get_severity_local(internal_anomaly_data['mse_error'],
                                                                             internal_anomaly_data['threshold']), 1),
                     "m.proto": ctx.get('protocol', 'TCP').upper(),
