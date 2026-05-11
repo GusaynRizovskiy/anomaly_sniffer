@@ -58,9 +58,9 @@ class RemoteTransmitter:
             },
             "params": {
                 "sortBy": "id",
-                "sortDir": "DESC",
+                "sortDir": "ASC",
                 "page": 1,
-                "pageSize": 50,
+                "pageSize": 20,
                 "search": ""
             }
         }
