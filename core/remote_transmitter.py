@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 import json
-import requests
 import websocket
 import logging
-import os
 import ssl
-from datetime import datetime
-from dotenv import load_dotenv
+import requests
+import urllib3
+from datetime import datetime, timedelta
+# Отключаем предупреждения SSL, так как работаем по IP
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Настраиваем локальный логгер для этого модуля, чтобы избежать циклического импорта
 logger = logging.getLogger(__name__)
@@ -28,6 +29,85 @@ class RemoteTransmitter:
         if ratio > 3.0: return "CRITICAL"
         if ratio > 1.5: return "WARNING"
         return "INFO"
+
+    def get_attack_history(self, minutes_back=30):
+        """
+        Запрашивает с сервера ретроспективу атак через HTTP API.
+        Возвращает список атак или пустой список при ошибке.
+        """
+        # 1. Проверка токена
+        if not self.token:
+            # Пытаемся авторизоваться, если токена нет
+            if not self.authenticate():
+                logger.error("API History: Нет токена и не удалось авторизоваться.")
+                return []
+
+        # 2. Настройка URL и заголовков
+        api_url = f"{self.base_url}/api/charts/get-attack-retrospective"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json"
+        }
+
+        # 3. Формирование времени (UTC)
+        # Сервер ждет формат ISO 8601 с 'Z' в конце
+        now = datetime.utcnow()
+        start_time = now - timedelta(minutes=minutes_back)
+
+        # 4. Формирование тела запроса (BODY) по вашей спецификации
+        payload = {
+            "filters": {
+                "unitType": "minute",
+                "unitValue": str(minutes_back),
+                "tsEnd": now.isoformat() + "Z",  # Время КОНЦА
+                "tsStart": start_time.isoformat() + "Z",  # Время НАЧАЛА
+                "groupSensorsIDSelected": []
+            },
+            "params": {
+                "sortBy": "id",
+                "sortDir": "DESC",  # DESC - чтобы новые были сверху
+                "page": 1,
+                "pageSize": 20,  # Берем последние 20
+                "search": ""
+            }
+        }
+
+        try:
+            # 5. Делаем POST запрос
+            response = requests.post(
+                api_url,
+                json=payload,
+                headers=headers,
+                verify=False,  # Игнорируем самоподписанный сертификат
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                # Обычно данные лежат в ключе, например 'items', 'data' или 'content'.
+                # Исходя из params.page, сервер должен возвращать структуру с пагинацией.
+                # Предположим, список лежит в data['items'] или в корне ответа.
+
+                # Попробуем найти список атак
+                attacks = []
+                if isinstance(data, list):
+                    attacks = data
+                elif isinstance(data, dict):
+                    attacks = data.get('items', data.get('data', []))
+
+                return attacks
+
+            elif response.status_code == 401:
+                logger.warning("API History: Токен протух, сбрасываем.")
+                self.token = None  # Сбрасываем токен, чтобы при следующем вызове переавторизоваться
+                return []
+            else:
+                logger.error(f"API History Ошибка: {response.status_code}, Ответ: {response.text}")
+                return []
+
+        except Exception as e:
+            logger.error(f"Исключение при запросе к API истории: {e}")
+            return []
 
     def authenticate(self):
         """Получение accessToken через REST API с детальной обработкой ошибок."""
