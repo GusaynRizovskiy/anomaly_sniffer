@@ -84,26 +84,42 @@ def print_attacks_table(attacks):
 
 
 def main():
+    # 1. Загружаем общую конфигурацию
     config = load_config()
 
-    # Инициализируем передатчик
-    # Передаем только URL, логин и пароль. Интерфейс для API не нужен.
-    transmitter = RemoteTransmitter(
-        base_url=config['network']['server_url'],
-        login=config['network']['login'],
-        password=config['network']['password'],
-        interface=""  # API не нужен интерфейс
-    )
+    # Выделяем секцию сервера для удобства
+    srv_cfg = config.get('server', {})
 
-    print("[*] Подключение к SIEM API и авторизация...")
-    if not transmitter.authenticate():
-        print("[FAIL] Не удалось авторизоваться на сервере API.")
+    # 2. Формируем базовый URL
+    # Проверяем наличие необходимых ключей
+    ip = srv_cfg.get('ip')
+    port = srv_cfg.get('port')
+    if not ip or not port:
+        print("[ERROR] В config.json отсутствуют ip или port в секции 'server'.")
         return
 
-    print("[SUCCESS] Авторизация пройдена. Начинаем мониторинг.")
+    base_url = f"https://{ip}:{port}"
+
+    # 3. Инициализируем передатчик ОДИН РАЗ со всеми аргументами
+    # ВАЖНО: передаем user_type из конфига (ключ 'type')
+    transmitter = RemoteTransmitter(
+        base_url=base_url,
+        login=srv_cfg.get('login'),
+        password=srv_cfg.get('password'),
+        user_type=srv_cfg.get('type')
+    )
+
+    print(f"[*] Подключение к SIEM API ({base_url}) и авторизация...")
+
+    # 4. Проходим аутентификацию
+    if not transmitter.authenticate():
+        print("[FAIL] Не удалось авторизоваться на сервере API. Проверьте логин/пароль в config.json.")
+        return
+
+    print("[SUCCESS] Авторизация пройдена. Начинаем мониторинг истории атак.")
     time.sleep(1)
 
-    # Бесконечный цикл мониторинга
+    # 5. Бесконечный цикл мониторинга
     try:
         while True:
             # Запрашиваем историю за последние 30 минут
@@ -116,6 +132,12 @@ def main():
             time.sleep(10)
     except KeyboardInterrupt:
         print("\n[*] Мониторинг остановлен пользователем.")
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR] Произошла ошибка в цикле мониторинга: {e}")
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
