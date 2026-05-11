@@ -2,9 +2,9 @@
     "server": {
         "ip": "185.22.155.17",
         "port": 9000,
-        "login": "test-ids",
-        "password": "!QAZ2wsx",
-        "type": "sensor-user"
+        "login": "maksim-user",
+        "password": "BoItmhit1!",
+        "type": "intel_center"
     },
     "settings": {
         "log_file_path": "logs/online",
