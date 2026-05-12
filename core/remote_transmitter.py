@@ -234,49 +234,64 @@ class RemoteTransmitter:
             self.ws = None
 
     def send_event(self, internal_anomaly_data):
-        """
-        Отправка события через WebSocket.
-        Удаляет пустые поля и использует префикс 'm.' для ключей.
-        """
-        if not self.token: return False
+        """Отправка события аномалии через WebSocket SIEM."""
+        if not self.ws or not self.ws.connected:
+            logger.error("WebSocket не подключен. Пропускаю отправку.")
+            return False
 
         try:
-            if not self.ws or not hasattr(self.ws, 'connected') or not self.ws.connected:
-                self.connect_ws()
+            # 1. Извлекаем контекст
+            ctx = internal_anomaly_data.get('network_context', {})
 
-            if self.ws and self.ws.connected:
-                severity_map = {"CRITICAL": 3, "WARNING": 2, "INFO": 1}
-                ctx = internal_anomaly_data.get('network_context', {})
+            # 2. Определяем значения по умолчанию
+            defaults = {
+                'src_ip': '0.0.0.0',
+                'dst_ip': '0.0.0.0',
+                'src_port': 0,
+                'dst_port': 0,
+                'protocol': 'UNKNOWN'
+            }
 
-                # Собираем данные
-                m_data = {
-                    "m.gid":None,
-                    "m.signature_id": 1,
-                    "m.rev":None,
-                    "m.category": "Network Anomaly",
-                    "m.signature": f"Anomaly Detected ({internal_anomaly_data.get('anomaly_score', 0)}%)",
-                    "m.ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-                    "m.flow_id":None,
-                    "m.severity": severity_map.get(self._get_severity_local(internal_anomaly_data['mse_error'],
-                                                                            internal_anomaly_data['threshold']), 1),
-                    "m.proto": ctx.get('protocol', 'TCP').upper(),
-                    "m.src_ip": ctx.get('src_ip', '0.0.0.0'),
-                    "m.src_port": int(ctx.get('src_port', 0)),
-                    "m.dest_ip": ctx.get('dst_ip', '0.0.0.0'),
-                    "m.dest_port": int(ctx.get('dst_port', 0))
-                }
+            # 3. Внутренняя функция-валидатор
+            def validate(val, key):
+                # Если значение пустое, None или "технический" ноль — берем из defaults
+                if val is None or val == "" or val == 0 or val == "0.0.0.0":
+                    return defaults.get(key, "N/A")
+                return val
 
-                # ФИЛЬТРАЦИЯ: Удаляем ключи, где значение None или пустая строка
-                # (Согласно требованию: "поля, которые не можешь заполнить, просто не передавай")
-                m_filtered = {k: v for k, v in m_data.items() if v is not None and v != ""}
+            # Карта важности
+            severity_map = {"CRITICAL": 4, "WARNING": 2, "INFO": 1}
 
-                event_payload = {"main": m_filtered}
+            # 4. Формируем финальную структуру m_data
+            m_data = {
+                "m.type": "Network Anomaly",
+                "m.signature": f"Anomaly Detected ({internal_anomaly_data.get('anomaly_score', 0):.2f}%)",
+                "m.ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                "m.severity": severity_map.get(self._get_severity_local(
+                    internal_anomaly_data.get('mse_error', 0),
+                    internal_anomaly_data.get('threshold', 1)
+                ), 1),
+                # Применяем валидатор к сетевым полям
+                "m.proto": validate(ctx.get('protocol'), 'protocol').upper(),
+                "m.src_ip": validate(ctx.get('src_ip'), 'src_ip'),
+                "m.src_port": int(validate(ctx.get('src_port'), 'src_port')),
+                "m.dest_ip": validate(ctx.get('dst_ip'), 'dst_ip'),
+                "m.dest_port": int(validate(ctx.get('dst_port'), 'dst_port'))
+            }
 
-                self.ws.send(json.dumps(event_payload))
-                print(f"[SERVER SUCCESS] Событие отправлено: {m_filtered['m.signature']}")
-                return True
-            return False
+            # Собираем полный пакет (теперь без фильтрации m_filtered, отправляем всё)
+            event_payload = {"main": m_data}
+
+            # 5. Вывод формата в консоль для проверки (как вы и хотели)
+            print("\n" + "-" * 30)
+            print("[DEBUG] Формат данных для отправки:")
+            print(json.dumps(event_payload, indent=2))
+            print("-" * 30 + "\n")
+
+            # 6. Отправка
+            self.ws.send(json.dumps(event_payload))
+            return True
+
         except Exception as e:
-            logger.error(f"Ошибка WebSocket: {e}")
-            self.ws = None
+            logger.error(f"Ошибка при подготовке/отправке события: {e}")
             return False

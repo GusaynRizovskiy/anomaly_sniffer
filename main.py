@@ -28,41 +28,25 @@ buffering_notified = False
 
 
 def save_anomaly_locally(anomaly_data):
-    """Сохранение аномалии в формате JSON в папку /logs/online"""
+    """
+    Сохраняет 'сырые' данные аномалии в JSON для последующей отправки.
+    """
     online_dir = os.path.join("logs", "online")
     if not os.path.exists(online_dir):
         os.makedirs(online_dir)
 
-    ctx = anomaly_data.get('network_context', {})
+    # Генерируем уникальное имя файла на основе времени
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    file_path = os.path.join(online_dir, f"anomaly_{timestamp}.json")
 
-    # Структура JSON должна быть идентична серверной
-    event_to_save = {
-        "type": "integratedContainerIds/transmittingEvents",
-        "transmittingEvents": [
-            {
-                "event_type": "alert",
-                "timestamp": datetime.now().isoformat(),
-                "src_ip": ctx.get('src_ip', '0.0.0.0'),
-                "src_port": int(ctx.get('src_port', 0)),
-                "dest_ip": ctx.get('dst_ip', '0.0.0.0'),
-                "dest_port": int(ctx.get('dst_port', 0)),
-                "proto": ctx.get('protocol', 'TCP'),
-                "signature": f"Anomaly Detected (Score: {anomaly_data.get('anomaly_score', 0)}%)",
-                "severity": 2,  # По умолчанию WARNING
-                "category": "Network Anomaly"
-            }
-        ]
-    }
-
-    filename = f"anomaly_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.json"
-    filepath = os.path.join(online_dir, filename)
-
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(event_to_save, f, ensure_ascii=False, indent=4)
-    # ИНФОРМАТИВНОЕ СООБЩЕНИЕ
-    print(f"[ЛОКАЛЬНЫЙ ЛОГ] [{datetime.now().strftime('%H:%M:%S')}] Аномалия сохранена в файл: {filename}")
-
-    # Настройка заголовков (должны совпадать с порядком в сниффере)
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            # Сохраняем словарь anomaly_data как есть.
+            # Именно его ожидает метод send_event в remote_transmitter.py
+            json.dump(anomaly_data, f, ensure_ascii=False, indent=4)
+        logger.info(f"Аномалия сохранена локально: {file_path}")
+    except Exception as e:
+        logger.error(f"Ошибка при локальном сохранении: {e}")
 HEADERS = [
     'total_packets', 'total_loopback', 'total_multicast', 'total_udp',
     'total_tcp', 'total_options', 'total_fragment', 'total_fin', 'total_syn',
