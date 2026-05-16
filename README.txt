@@ -72,3 +72,10 @@ Anomaly Sniffer — это интеллектуальный программны
 Разметка: python main.py --mode label --data_file traffic.csv (получаешь traffic_labeled.csv).
 
 Валидация: python main.py --mode validate --data_file traffic.csv --labels traffic_labeled.csv.
+
+python main.py train --data_file data/train_traffic.csv --epochs 50 
+
+
+python main.py detect-offline --data_file data/new_traffic.csv --threshold 0.01
+
+python main.py detect-online --interface eth0 --threshold 0.01

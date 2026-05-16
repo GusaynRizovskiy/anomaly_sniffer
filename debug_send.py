@@ -8,7 +8,6 @@ import threading
 import websocket  # pip install websocket-client
 import ssl
 from datetime import datetime
-from datetime import datetime, timedelta
 
 # Включаем полную трассировку пакетов в консоль
 websocket.enableTrace(True)
@@ -77,12 +76,29 @@ def run_isolated_ordered_payload_test():
 
     try:
         # 2. БЕЗ ПАУЗЫ формируем и мгновенно отправляем пакет
-        moscow_time = datetime.utcnow() + timedelta(hours=3)
-        ts_now = moscow_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        ts_now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
         raw_payload = {
             "type": "integratedContainerIds/transmittingEvents",
             "transmittingEvents": [
+                {
+                    "event_type": "alert",
+                    "main": {
+                        "ts": ts_now,
+                        "flow_id": 1067039902185510,
+                        "src_ip": "192.168.1.65",
+                        "src_port": 63379,
+                        "dest_ip": "192.168.1.66",
+                        "dest_port": 443,
+                        "proto": "TCP",
+                        "gid": 1,
+                        "signature_id": 2027695,
+                        "rev": 5,
+                        "signature": "ET INFO Observed Cloudflare DNS over HTTPS Domain (cloudflare-dns .com in TLS SNI)",
+                        "severity": 3,
+                        "category": "Misc activity"
+                    }
+                }
             ]
         }
 
