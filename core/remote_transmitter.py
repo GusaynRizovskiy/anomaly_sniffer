@@ -204,7 +204,7 @@ class RemoteTransmitter:
                 return
 
         # Формируем URL динамически на основе base_url
-        ws_url = f"wss://{self.raw_url}/integrated-container-ids/connection-integrated-container-ids?token={self.token}"
+        ws_url = f"wss://{self.raw_url}/api/integrated-container-ids/connection-integrated-container-ids?token={self.token}"
 
         print(f"\n[*] Попытка установить WebSocket соединение...")
         print(f"[*] URL: {ws_url}")
@@ -234,16 +234,16 @@ class RemoteTransmitter:
             self.ws = None
 
     def send_event(self, internal_anomaly_data):
-        """Отправка события аномалии через WebSocket SIEM."""
+        """Отправка события аномалии через WebSocket SIEM в новом правильном формате."""
         if not self.ws or not self.ws.connected:
             logger.error("WebSocket не подключен. Пропускаю отправку.")
             return False
 
         try:
-            # 1. Извлекаем контекст
+            # 1. Извлекаем сетевой контекст
             ctx = internal_anomaly_data.get('network_context', {})
 
-            # 2. Определяем значения по умолчанию
+            # 2. Определяем значения по умолчанию для валидации
             defaults = {
                 'src_ip': '0.0.0.0',
                 'dst_ip': '0.0.0.0',
@@ -252,46 +252,60 @@ class RemoteTransmitter:
                 'protocol': 'UNKNOWN'
             }
 
-            # 3. Внутренняя функция-валидатор
             def validate(val, key):
-                # Если значение пустое, None или "технический" ноль — берем из defaults
                 if val is None or val == "" or val == 0 or val == "0.0.0.0":
                     return defaults.get(key, "N/A")
                 return val
 
-            # Карта важности
-            severity_map = {"CRITICAL": 4, "WARNING": 2, "INFO": 1}
+            # Карта важности (мапим текстовый уровень в числовой приоритет для SIEM)
+            severity_map = {"CRITICAL": 1, "WARNING": 2, "INFO": 3}
 
-            # 4. Формируем финальную структуру m_data
-            m_data = {
-                "m.type": "Network Anomaly",
-                "m.signature": f"Anomaly Detected ({internal_anomaly_data.get('anomaly_score', 0):.2f}%)",
-                "m.ts": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-                "m.severity": severity_map.get(self._get_severity_local(
-                    internal_anomaly_data.get('mse_error', 0),
-                    internal_anomaly_data.get('threshold', 1)
-                ), 1),
-                # Применяем валидатор к сетевым полям
-                "m.proto": validate(ctx.get('protocol'), 'protocol').upper(),
-                "m.src_ip": validate(ctx.get('src_ip'), 'src_ip'),
-                "m.src_port": int(validate(ctx.get('src_port'), 'src_port')),
-                "m.dest_ip": validate(ctx.get('dst_ip'), 'dst_ip'),
-                "m.dest_port": int(validate(ctx.get('dst_port'), 'dst_port'))
+            # Определяем текстовый уровень на основе MSE
+            local_sev = self._get_severity_local(
+                internal_anomaly_data.get('mse_error', 0),
+                internal_anomaly_data.get('threshold', 1)
+            )
+            numeric_severity = severity_map.get(local_sev, 3)
+
+            # 3. Формируем временную метку в UTC
+            ts_now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+            # 4. Собираем внутреннюю структуру "main", валидируя типы данных
+            main_data = {
+                "ts": ts_now,
+                "flow_id": int(internal_anomaly_data.get('flow_id', 1067039902185510)),  # Если есть в данных, берем его
+                "src_ip": str(validate(ctx.get('src_ip'), 'src_ip')),
+                "src_port": int(validate(ctx.get('src_port'), 'src_port')),
+                "dest_ip": str(validate(ctx.get('dst_ip'), 'dst_ip')),
+                "dest_port": int(validate(ctx.get('dst_port'), 'dst_port')),
+                "proto": str(validate(ctx.get('protocol'), 'protocol')).upper(),
+                "gid": 1,
+                "signature_id": int(internal_anomaly_data.get('signature_id', 2027695)),
+                "rev": 1,
+                "signature": f"Anomaly Detected ({internal_anomaly_data.get('anomaly_score', 0):.2f}%)",
+                "severity": numeric_severity,
+                "category": "Network Anomaly"
             }
 
-            # Собираем полный пакет (теперь без фильтрации m_filtered, отправляем всё)
-            event_payload = {"main": m_data}
+            # 5. Оборачиваем в правильную структуру контейнера
+            final_payload = {
+                "type": "integratedContainerIds/transmittingEvents",
+                "transmittingEvents": [
+                    {
+                        "event_type": "alert",
+                        "main": main_data
+                    }
+                ]
+            }
 
-            # 5. Вывод формата в консоль для проверки (как вы и хотели)
-            print("\n" + "-" * 30)
-            print("[DEBUG] Формат данных для отправки:")
-            print(json.dumps(event_payload, indent=2))
-            print("-" * 30 + "\n")
+            # 6. Сериализуем в компактную строку без лишних пробелов (как в debug_send.py)
+            json_string = json.dumps(final_payload, separators=(',', ':'), ensure_ascii=False)
 
-            # 6. Отправка
-            self.ws.send(json.dumps(event_payload))
+            # 7. Отправка в сокет
+            self.ws.send(json_string)
+            logger.info("[SUCCESS] Событие аномалии успешно отправлено в SIEM.")
             return True
 
         except Exception as e:
-            logger.error(f"Ошибка при подготовке/отправке события: {e}")
+            logger.error(f"Ошибка при подготовке/отправке события через основной transmitter: {e}")
             return False

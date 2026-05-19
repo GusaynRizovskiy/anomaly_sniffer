@@ -15,7 +15,7 @@ except ImportError as e:
     sys.exit(1)
 
 
-def load_config(config_path="config.json"):
+def load_config(config_path="config_api.json"):
     """Загрузка конфигурационного файла."""
     try:
         with open(config_path, 'r', encoding='utf-8') as f:

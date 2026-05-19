@@ -1,0 +1,14 @@
+{
+    "server": {
+        "ip": "185.22.155.17",
+        "port": 9000,
+        "login": "maksim-user",
+        "password": "BoItmhit1!",
+        "type": "intel_center"
+    },
+    "settings": {
+        "log_file_path": "logs/online",
+        "scan_interval_seconds": 5,
+        "delete_after_send": false
+    }
+}
