@@ -40,6 +40,79 @@ class RemoteTransmitter:
         if ratio > 3.0: return "CRITICAL"
         if ratio > 1.5: return "WARNING"
         return "INFO"
+    def get_attack_history(self, minutes_back=30):
+        if not self.token:
+            print("[CRITICAL] Нет токена! Проверьте авторизацию.")
+            return []
+
+        api_url = f"{self.base_url}/api/charts/get-attack-retrospective"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json"
+        }
+
+        # Генерируем корректные временные метки (как в успешном ТЕСТЕ 1)
+        now = datetime.utcnow()
+        start_time = now - timedelta(minutes=int(minutes_back))
+
+        def format_ts_simple(dt):
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        payload = {
+            "filters": {
+                "unitType": "minute",
+                "unitValue": int(minutes_back),  # Передаем строго как int
+                "tsEnd": format_ts_simple(now),
+                "tsStart": format_ts_simple(start_time),
+                "groupSensorsIDSelected": []
+            },
+            "params": {
+                "sortBy": "id",
+                "sortDir": "ASC",
+                "page": 1,
+                "pageSize": 20,
+                "search": ""
+            }
+        }
+
+        try:
+            response = requests.post(api_url, json=payload, headers=headers, verify=False, timeout=15)
+
+            if response.status_code != 200:
+                print(f"[API ERROR] Статус: {response.status_code}, Ответ: {response.text}")
+                return []
+
+            raw_json = response.json()
+
+            if isinstance(raw_json, dict):
+                data = raw_json.get('rows')
+
+                if data is None:
+                    data = raw_json.get('items') or raw_json.get('data') or raw_json.get('content')
+
+                if data is None:
+                    print(f"[API DEBUG] Не удалось найти список событий. Ключи в ответе: {list(raw_json.keys())}")
+                    return []
+
+                print(f"[API DEBUG] Получено записей из 'rows': {len(data)}")
+
+                # ================= ВРЕМЕННЫЙ ДЕБАГ КЛЮЧЕЙ =================
+                if len(data) > 0:
+                    print("\n[API DEBUG] === СТРУКТУРА ОДНОГО СОБЫТИЯ ОТ СЕРВЕРА ===")
+                    print(json.dumps(data[0], indent=4, ensure_ascii=False))
+                    print("====================================================\n")
+                # ==========================================================
+
+                return data
+
+            elif isinstance(raw_json, list):
+                return raw_json
+
+            return []
+
+        except Exception as e:
+            print(f"[API ERROR] Ошибка при запросе истории: {e}")
+            return []
 
     def authenticate(self):
         """Получение accessToken через REST API."""
